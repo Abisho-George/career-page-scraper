@@ -92,7 +92,8 @@ class Browser:
                 headers = {k.lower(): v for k, v in (await resp.all_headers()).items()} if resp else {}
                 if self.recorder is not None:
                     try:
-                        self.recorder.record("GET", url, status, headers, html, kind="rendered")
+                        self.recorder.record("GET", url, status, headers, html, kind="rendered",
+                                             final_url=page.url)
                     except Exception as e:  # noqa: BLE001
                         log.warning("could not save rendered page %s: %s", url, e)
                 return Response(url=page.url, status=status, headers=headers, text=html)

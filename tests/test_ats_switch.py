@@ -141,6 +141,59 @@ def test_404_board_still_linked_nothing_else(acme_on_greenhouse):
     assert c["status_reason"] == f"{ATS_SWITCH_NOTE}; careers page still links to the old greenhouse board 'acme'"
     assert router.urls().count(GH_API) == 1
     assert len(active(conn)) == 2 and c["job_count"] == 2
+    assert (c["ats"], c["ats_token"]) == (None, None)  # the dead board is not stored again
+
+
+def test_dead_board_still_linked_page_jobs_close_on_the_next_run(acme_on_greenhouse):
+    conn = acme_on_greenhouse
+    page = (200, fixture("careers_greenhouse_embed.html").replace(
+        "</body>", '<script type="application/ld+json">{"@type":"JobPosting","title":"Page Role",'
+                   '"url":"https://acme.com/careers/page-role-1"}</script></body>'))
+    _, c, _ = run_once(conn, {GH_API: GH_404, CAREERS: page})
+    assert (c["status"], c["method"], c["ats_token"]) == ("OK", "jsonld", None)
+    assert len(active(conn, "greenhouse")) == 2  # switch run: nothing closed
+    # next run takes the normal path (no fast path to the dead board) and closes normally
+    _, c, router = run_once(conn, {GH_API: GH_404, CAREERS: page})
+    assert (c["status"], c["method"]) == ("OK", "jsonld") and not c["status_reason"].startswith(ATS_SWITCH_NOTE)
+    assert active(conn) == ["https://acme.com/careers/page-role-1"]
+
+
+@pytest.mark.parametrize("status", [400, 401, 422])
+def test_permanent_4xx_on_stored_token_rediscovers(acme_on_greenhouse, status):
+    conn = acme_on_greenhouse
+    _, c, _ = run_once(conn, {GH_API: (status, "{}"), CAREERS: LEVER_PAGE, LEVER_API: LEVER_JOBS})
+    assert (c["status"], c["ats"], c["status_reason"]) == ("OK", "lever", ATS_SWITCH_NOTE)
+
+
+def test_non_json_board_response_is_board_gone(acme_on_greenhouse):
+    conn = acme_on_greenhouse
+    _, c, _ = run_once(conn, {GH_API: (200, "<html>moved</html>"), CAREERS: LEVER_PAGE, LEVER_API: LEVER_JOBS})
+    assert (c["status"], c["ats"]) == ("OK", "lever")
+
+
+def test_empty_board_twice_but_page_lists_jobs(acme_on_greenhouse):
+    conn = acme_on_greenhouse
+    page = (200, fixture("careers_greenhouse_embed.html").replace(
+        "</body>", '<script type="application/ld+json">[{"@type":"JobPosting","title":"Role A","url":"https://acme.com/j/a"},'
+                   '{"@type":"JobPosting","title":"Role B","url":"https://acme.com/j/b"}]</script></body>'))
+    run_once(conn, {GH_API: GH_EMPTY, CAREERS: page})
+    _, c, router = run_once(conn, {GH_API: GH_EMPTY, CAREERS: page})
+    assert (c["status"], c["method"], c["ats"], c["ats_token"]) == ("OK", "jsonld", "greenhouse", None)
+    assert "jobs taken from the careers page" in c["status_reason"]
+    assert router.urls().count(GH_API) == 1
+    assert len(active(conn, "greenhouse")) == 2  # switch run: nothing closed
+    _, c, _ = run_once(conn, {GH_API: GH_EMPTY, CAREERS: page})
+    assert (c["status"], c["method"], c["job_count"]) == ("OK", "jsonld", 2)
+    assert active(conn) == ["https://acme.com/j/a", "https://acme.com/j/b"]
+
+
+def test_fresh_company_empty_board_but_page_lists_jobs(conn):
+    db.upsert_company(conn, "Acme", "acme.com")
+    conn.commit()
+    page = (200, fixture("careers_greenhouse_embed.html").replace(
+        "</body>", '<script type="application/ld+json">{"@type":"JobPosting","title":"Role A","url":"https://acme.com/j/a"}</script></body>'))
+    _, c, _ = run_once(conn, {CAREERS: page, GH_API: GH_EMPTY})
+    assert (c["status"], c["method"], c["job_count"]) == ("OK", "jsonld", 1)
 
 
 def test_404_board_and_discovery_fails(acme_on_greenhouse):
@@ -176,3 +229,19 @@ def test_empty_board_for_company_without_jobs_is_plain_ok(conn):
     _, c, _ = run_once(conn, {GH_API: GH_EMPTY})
     _, c, _ = run_once(conn, {GH_API: GH_EMPTY})
     assert (c["status"], c["ats"], c["consecutive_empty_ats_runs"], c["status_reason"]) == ("OK", "greenhouse", 0, "")
+
+
+def test_dead_board_still_linked_is_stable_over_runs(acme_on_greenhouse):
+    """Run after run: the dead token is never stored again, so there is no fast path to it and
+    no switch / allow_close=False on every other run."""
+    conn = acme_on_greenhouse
+    page = (200, fixture("careers_greenhouse_embed.html").replace(
+        "</body>", '<script type="application/ld+json">{"@type":"JobPosting","title":"Page Role",'
+                   '"url":"https://acme.com/careers/page-role-1"}</script></body>'))
+    reasons = []
+    for _ in range(4):
+        _, c, _ = run_once(conn, {GH_API: GH_404, CAREERS: page})
+        assert c["ats_token"] is None and c["status"] == "OK"
+        reasons.append(c["status_reason"].startswith(ATS_SWITCH_NOTE))
+    assert reasons == [True, False, False, False]
+    assert active(conn) == ["https://acme.com/careers/page-role-1"]

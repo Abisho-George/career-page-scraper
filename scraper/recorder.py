@@ -36,17 +36,19 @@ def _slug(url: str, max_len: int = 90) -> str:
     return s[:max_len] or "root"
 
 
-def _pretty(text: str) -> tuple[str, str]:
-    """(file extension, file text). JSON is pretty-printed for reading; the values are unchanged."""
-    stripped = text.lstrip()
-    if stripped[:1] in ("{", "["):
+def _extension(text: str) -> str:
+    """File extension for a body. The body itself is saved exactly as received (no
+    pretty-printing), so a replay sees the same bytes and the same size limits as the live run;
+    open .json files in an editor that formats JSON to read them."""
+    if text.lstrip()[:1] in ("{", "["):
         try:
-            return "json", json.dumps(json.loads(text), indent=2, ensure_ascii=False)
+            json.loads(text)
+            return "json"
         except ValueError:
             pass
     if "<html" in text[:2000].lower() or "<!doctype" in text[:200].lower():
-        return "html", text
-    return "txt", text
+        return "html"
+    return "txt"
 
 
 class FixtureRecorder:
@@ -58,11 +60,14 @@ class FixtureRecorder:
         self.entries: list[dict] = []
 
     def record(self, method: str, url: str, status: int, headers: dict, text: str,
-               request_body: str | None = None, kind: str = "http", error: str | None = None) -> Path:
-        """kind: "http" (a response), "rendered" (browser HTML) or "error" (no response: `error`
-        holds the exception name, e.g. ConnectError, and a replay raises it again)."""
+               request_body: str | None = None, kind: str = "http", error: str | None = None,
+               final_url: str | None = None) -> Path:
+        """kind: "http" (a response), "rendered" (browser HTML; `final_url` is where the page ended
+        up) or "error" (no response: `error` holds the exception name, e.g. ConnectError, and a
+        replay raises it again). `url` should be the URL as httpx normalised it."""
         n = len(self.entries) + 1
-        ext, body = _pretty(text or "")
+        body = text or ""
+        ext = _extension(body)
         label = {"rendered": "RENDERED", "error": f"{method.upper()}-ERROR"}.get(kind, method.upper())
         name = f"{n:03d}_{label}_{_slug(url)}.{ext}"
         path = self.dir / name
@@ -70,6 +75,7 @@ class FixtureRecorder:
         self.entries.append({
             "file": name, "kind": kind, "method": method.upper(), "url": url, "status": status,
             "headers": dict(headers or {}), "request_body": request_body, "error": error,
+            "final_url": final_url,
         })
         self._write_index()
         return path

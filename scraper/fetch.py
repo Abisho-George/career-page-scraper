@@ -20,7 +20,7 @@ import httpx
 from tenacity import AsyncRetrying, retry_if_exception_type, stop_after_attempt, wait_fixed
 
 import config
-from scraper.ats.base import RobotsDisallowedError
+from scraper.ats.base import BlockedError, RobotsDisallowedError
 
 log = logging.getLogger(__name__)
 
@@ -64,6 +64,7 @@ class Fetcher:
         self._locks: dict[str, asyncio.Lock] = {}
         self._last: dict[str, float] = {}
         self._robots: dict[str, RobotFileParser | None] = {}
+        self._robots_unavailable: dict[str, Response] = {}  # robots.txt answered 5xx: kept to explain why
         self._robots_locks: dict[str, asyncio.Lock] = {}
         self.request_log: list[tuple[str, float]] = []  # (host, monotonic time) for tests/diagnostics
 
@@ -91,8 +92,18 @@ class Fetcher:
     async def request(self, method: str, url: str, *, headers: dict | None = None,
                       content: str | None = None, check_robots: bool = True) -> Response:
         if check_robots and self.respect_robots and not await self.allowed(url):
-            path = urlsplit(url).path or "/"
-            raise RobotsDisallowedError(f"robots.txt disallows {path}")
+            parts = urlsplit(url)
+            unavailable = self._robots_unavailable.get(f"{parts.scheme}://{parts.netloc}")
+            if unavailable is not None:
+                # robots.txt didn't disallow anything: it failed. A bot-protection page there
+                # (e.g. a Cloudflare 503 challenge) is BLOCKED; a plain 5xx is treated as
+                # disallow-all per RFC 9309, and the reason says so honestly.
+                from scraper.blockcheck import is_blocked  # local import: blockcheck imports this module
+                blocked, reason = is_blocked(unavailable)
+                if blocked and not reason.startswith("http "):
+                    raise BlockedError(reason)
+                raise RobotsDisallowedError(f"robots.txt unavailable (http {unavailable.status}); treated as disallow")
+            raise RobotsDisallowedError(f"robots.txt disallows {parts.path or '/'}")
         async for attempt in AsyncRetrying(
             retry=retry_if_exception_type(RETRYABLE),
             stop=stop_after_attempt(config.MAX_RETRIES + 1),
@@ -132,6 +143,7 @@ class Fetcher:
             return parser
         if 400 <= r.status < 500 or r.ok:
             return None
+        self._robots_unavailable[base] = r
         parser.disallow_all = True
         return parser
 
@@ -166,7 +178,11 @@ class Fetcher:
             except httpx.HTTPError as e:
                 if self.recorder is not None:
                     try:
-                        self.recorder.record(method, url, 0, {}, "", request_body=content, kind="error",
+                        try:
+                            rec_url = str(e.request.url)  # normalised, as a replay will request it
+                        except RuntimeError:
+                            rec_url = str(httpx.URL(url))
+                        self.recorder.record(method, rec_url, 0, {}, "", request_body=content, kind="error",
                                              error=type(e).__name__)
                     except Exception:  # noqa: BLE001
                         pass

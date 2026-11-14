@@ -356,3 +356,20 @@ def test_sharp_drop_reason_text(conn):
     c = save(4)
     assert c["status_reason"] == "sharp drop confirmed, 16 jobs closed"
     assert (c["job_count"], c["pending_drop_count"]) == (4, 0)
+
+
+def test_robots_503_cloudflare_challenge_is_blocked(conn):
+    cf503 = (503, fixture("cloudflare_challenge.html"))
+    routes = {"https://cf.com/robots.txt": cf503, **{f"https://cf.com{p}": cf503 for p in config.CAREERS_PATHS + ["/"]}}
+    process(conn, Router(routes), "cf.com")
+    assert tuple(company(conn, "cf.com")[k] for k in ("status", "status_reason")) == ("BLOCKED", "cloudflare challenge")
+    process(conn, Router(routes), "cf.com", careers_url="https://cf.com/careers")
+    assert company(conn, "cf.com")["status"] == "BLOCKED"
+
+
+def test_robots_plain_500_is_honest_about_it(conn):
+    routes = {"https://acme.com/robots.txt": (500, "oops", {"content-type": "text/plain"}),
+              "https://acme.com/careers": (200, fixture("careers_greenhouse_embed.html"))}
+    process(conn, Router(routes), "acme.com", careers_url="https://acme.com/careers")
+    c = company(conn, "acme.com")
+    assert (c["status"], c["status_reason"]) == ("ROBOTS_DISALLOWED", "robots.txt unavailable (http 500); treated as disallow")

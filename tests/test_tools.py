@@ -69,8 +69,33 @@ def test_save_fixtures_writes_readable_files_and_summary(isolated, monkeypatch, 
     hop = next(e for e in index if e["url"] == "https://www.acme.com/careers")
     assert hop["status"] == 301 and hop["headers"]["location"] == "https://www.acme.com/en/careers"
     assert "saved" in capsys.readouterr().out
-    # the real database was not touched
-    assert db.get_company(db.connect(), "acme.com") is None
+    # the real database was not created
+    assert not config.DB_PATH.exists()
+
+
+def test_save_fixtures_reads_existing_db_without_changing_it(isolated, monkeypatch):
+    import sqlite3
+    old = sqlite3.connect(config.DB_PATH)
+    old.executescript("""CREATE TABLE companies (id INTEGER PRIMARY KEY, name TEXT, website TEXT UNIQUE NOT NULL,
+        careers_url TEXT, careers_url_source TEXT, ats TEXT, ats_token TEXT, status TEXT, status_reason TEXT,
+        method TEXT, job_count INTEGER, last_checked TEXT, last_run_id INTEGER);
+        INSERT INTO companies (name, website, careers_url, careers_url_source) VALUES
+        ('Acme Corp', 'acme.com', 'https://www.acme.com/en/careers', 'sheet');""")
+    old.commit()
+    old.close()
+    before = config.DB_PATH.read_bytes()
+    router = record_acme(monkeypatch)
+    assert config.DB_PATH.read_bytes() == before  # not migrated, not written
+    assert router.urls()[1] == "https://www.acme.com/en/careers"  # used the sheet careers_url
+    summary = json.loads((isolated / "live" / "acme.com" / "summary.json").read_text())
+    assert summary["company_name"] == "Acme Corp" and summary["careers_url_from_sheet"]
+
+
+def test_bodies_saved_exactly_as_received(isolated, monkeypatch):
+    record_acme(monkeypatch)
+    folder = isolated / "live" / "acme.com"
+    saved = next(p for p in folder.iterdir() if "boards-api" in p.name and "robots" not in p.name)
+    assert saved.read_text() == json.dumps(fixture_json("greenhouse_jobs.json"))
 
 
 def test_rerun_replaces_previous_recording(isolated, monkeypatch):
@@ -291,3 +316,63 @@ def test_check_sheets_command_exit_code(key_file, monkeypatch, tmp_path):
     monkeypatch.setattr(config, "LOG_DIR", tmp_path / "logs")
     monkeypatch.setattr(config, "SHEET_ID", "")
     assert main.main(["check-sheets"]) == 1
+
+
+def _rec(tmp_path):
+    from scraper.recorder import FixtureRecorder
+    return FixtureRecorder(tmp_path / "rec")
+
+
+def test_replay_retry_order_per_request(tmp_path):
+    rec = _rec(tmp_path)
+    url = "https://acme.wd5.myworkdayjobs.com/wday/cxs/acme/External/jobs"
+    rec.record("POST", url, 0, {}, "", request_body='{"offset": 0}', kind="error", error="ReadTimeout")
+    rec.record("POST", url, 200, {"content-type": "application/json"}, '{"page": 1}', request_body='{"offset": 0}')
+    rec.record("POST", url, 200, {"content-type": "application/json"}, '{"page": 2}', request_body='{"offset": 20}')
+    router, _, _ = load_recording(tmp_path / "rec")
+
+    async def go():
+        async with router.fetcher(respect_robots=False) as f:  # retries the ReadTimeout once
+            r1 = await f.request("POST", url, content='{"offset": 0}')
+            r2 = await f.request("POST", url, content='{"offset": 20}')
+            return r1.json(), r2.json()
+    assert asyncio.run(go()) == ({"page": 1}, {"page": 2})
+
+
+def test_recorded_error_url_is_normalised(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "MAX_RETRIES", 0)
+    rec = _rec(tmp_path)
+
+    async def live():
+        async with Router({"https://careers.acme.com": dead}).fetcher(recorder=rec, respect_robots=False) as f:
+            with pytest.raises(httpx.ConnectError):
+                await f.get("https://Careers.Acme.com")
+    asyncio.run(live())
+    router, _, _ = load_recording(tmp_path / "rec")
+
+    async def replay():
+        async with router.fetcher(respect_robots=False) as f:
+            with pytest.raises(httpx.ConnectError):
+                await f.get("https://Careers.Acme.com")
+    asyncio.run(replay())
+
+
+def test_robots_without_content_type_replays_as_robots(tmp_path):
+    rec = _rec(tmp_path)
+    rec.record("GET", "https://acme.com/robots.txt", 200, {}, "User-agent: *\nDisallow: /careers\n")
+    router, _, _ = load_recording(tmp_path / "rec")
+
+    async def go():
+        async with router.fetcher() as f:
+            return await f.allowed("https://acme.com/careers")
+    assert asyncio.run(go()) is False
+
+
+def test_rendered_page_replays_status_headers_and_final_url(tmp_path):
+    from tests.test_replay import ReplayBrowser
+    rec = _rec(tmp_path)
+    rec.record("GET", "https://acme.com/careers", 403, {"cf-mitigated": "challenge"}, "<html>no</html>",
+               kind="rendered", final_url="https://acme.com/en/careers")
+    _, renders, _ = load_recording(tmp_path / "rec")
+    r = asyncio.run(ReplayBrowser(renders).render("https://acme.com/careers"))
+    assert (r.status, r.headers, r.url) == (403, {"cf-mitigated": "challenge"}, "https://acme.com/en/careers")

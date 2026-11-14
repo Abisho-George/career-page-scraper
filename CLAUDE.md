@@ -46,7 +46,7 @@ gspread + google-auth, sqlite3 (stdlib), python-dotenv, pytest, tenacity.
 | NO_JOBS_FOUND | careers page found, nothing extractable |
 | NO_CAREERS_PAGE | discovery failed |
 | BLOCKED | bot-protection signal only (blockcheck.py, or 403/429/503 from an ATS API) |
-| ROBOTS_DISALLOWED | robots.txt disallows the careers page or the ATS endpoint; reason keeps the text, e.g. "robots.txt disallows /careers" |
+| ROBOTS_DISALLOWED | robots.txt disallows the careers page or the ATS endpoint; reason keeps the text, e.g. "robots.txt disallows /careers". A robots.txt that fails with a plain 5xx is treated as disallow-all (RFC 9309) with reason "robots.txt unavailable (http 500); treated as disallow"; a bot-protection page served on robots.txt is BLOCKED |
 | ERROR | unexpected exception / timeout; reason holds the type |
 | PENDING | not processed yet |
 

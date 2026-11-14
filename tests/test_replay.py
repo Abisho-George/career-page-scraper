@@ -23,7 +23,8 @@ class ReplayBrowser:
     async def render(self, url):
         if url not in self.renders:
             raise RuntimeError(f"no saved render for {url}")
-        return Response(url=url, status=200, headers={}, text=self.renders[url])
+        r = self.renders[url]
+        return Response(url=r["final_url"], status=r["status"], headers=r["headers"], text=r["text"])
 
 
 @pytest.mark.skipif(not CASES, reason="no recordings in tests/fixtures/replay/ yet (see LIVE_TEST.md)")

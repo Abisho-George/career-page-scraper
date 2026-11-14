@@ -276,33 +276,40 @@ async def _run_stages(ctx: Context, company: sqlite3.Row) -> Outcome:
     out.ats, out.ats_token = ats, token or None
     log.debug("detected ats=%s token=%s", ats, token)
 
-    # 4) ATS API.
+    # 4) ATS API. An ATS that says 0 jobs does not end the search: the careers page itself may
+    #    still list jobs (e.g. a stale link to an emptied board). 0 is accepted only when the
+    #    page has nothing either.
     ats_note = ""
+    ats_said_empty = False
     if switched and (ats, token) == old_ats:
-        # Rediscovery found the same board we just gave up on.
+        # Rediscovery found the same board we just gave up on: don't call it again.
         if switched == "empty":
-            # Still linked from the careers page and empty twice: the company really has no
-            # openings. Accept 0 jobs and close the old ones.
-            out.status, out.method, out.jobs, out.allow_close = "OK", "ats_api", [], True
-            out.reason = f"{ATS_SWITCH_NOTE}; same {ats} board still linked and empty, 0 jobs accepted"
-            return out
-        ats_note = f"careers page still links to the old {ats} board {token!r}"
+            ats_said_empty = True
+        else:
+            ats_note = f"careers page still links to the old {ats} board {token!r}"
+            out.ats = out.ats_token = None  # never store a dead board again
     elif ats in MODULES and token:
         try:
             jobs = await _try_ats(ctx, ats, token, plan)
         except BlockedError as e:
             return Outcome(**{**out.__dict__, "status": e.status, "reason": e.reason})
-        if jobs is not None:
+        if jobs:
             out.status, out.method, out.jobs, out.empty_ats_runs = "OK", "ats_api", jobs, 0
             return out
-        ats_note = f"{ats} api did not accept token {token!r}"
+        if jobs is None:
+            ats_note = f"{ats} api did not accept token {token!r}"
+            # Never store a token the API just rejected: the next run would take the fast path
+            # to a dead board, "switch", and flip back and forth every run.
+            out.ats_token = None
+        else:
+            ats_said_empty = True
 
     # 5-6) JSON-LD, then heuristic links, on the plain HTML.
     jobs, method = await _run_ladder(ctx, pages, domain, url)
 
     # 7) Browser fallback for JS-rendered pages (pointless when the jobs live on a known
-    #    ATS we can't extract yet).
-    if not jobs and ctx.browser is not None and ats not in FLAG_ONLY \
+    #    ATS we can't extract yet, or when a supported ATS already answered "0 jobs").
+    if not jobs and ctx.browser is not None and ats not in FLAG_ONLY and not ats_said_empty \
             and any(looks_js_rendered(p.text) for p in pages):
         target = pages[-1].url
         log.debug("rendering %s with browser", target)
@@ -331,6 +338,22 @@ async def _run_stages(ctx: Context, company: sqlite3.Row) -> Outcome:
 
     if jobs:
         out.status, out.method, out.jobs = "OK", method, jobs
+        if ats_said_empty:
+            # The linked board is empty but the page lists jobs: use the page, and don't keep the
+            # empty board's token (that would send the next run straight to "0 jobs").
+            out.ats_token = None
+            out.empty_ats_runs = 0
+            out.reason = f"{ats} board is empty; jobs taken from the careers page"
+        return out
+
+    if ats_said_empty:
+        out.status, out.method, out.jobs, out.empty_ats_runs = "OK", "ats_api", [], 0
+        out.ats, out.ats_token = ats, token
+        if switched == "empty":
+            # Still linked, empty twice, and nothing on the page: the company really has no
+            # openings. Accept 0 jobs and close the old ones.
+            out.allow_close = True
+            out.reason = f"{ATS_SWITCH_NOTE}; same {ats} board still linked and empty, 0 jobs accepted"
         return out
 
     if out.ats in FLAG_ONLY:

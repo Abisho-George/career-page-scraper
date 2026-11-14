@@ -15,8 +15,9 @@ class AtsError(Exception):
 
 
 class AtsBoardGone(AtsError):
-    """The board itself is gone: HTTP 404/410, or a 2xx response that is not a job board
-    (e.g. {"success": false}). Means the company moved ATS or removed the board."""
+    """The board itself is gone or invalid: HTTP 404/410 or another permanent 4xx (400, 401,
+    422, ...), or a 2xx response that is not a job board (not JSON, or e.g. {"success": false}).
+    Means the company moved ATS or removed the board."""
 
 
 class BlockedError(Exception):
@@ -87,22 +88,23 @@ def html_to_text(raw: str | None, max_chars: int = config.DESCRIPTION_MAX_CHARS)
 
 
 async def get_json(fetcher, url: str, *, method: str = "GET", payload: dict | None = None, what: str = "ats api"):
-    """Fetch JSON from an ATS API. 403/429/503 -> BlockedError; 404/410 -> AtsBoardGone;
-    other non-2xx or bad JSON -> AtsError. robots.txt disallow -> RobotsDisallowedError."""
+    """Fetch JSON from an ATS API. 403/429/503 -> BlockedError; other 4xx (except 408) or a 2xx
+    that isn't JSON -> AtsBoardGone; 5xx / 408 -> AtsError (transient).
+    robots.txt disallow -> RobotsDisallowedError."""
     if method == "POST":
         resp = await fetcher.post_json(url, payload or {})
     else:
         resp = await fetcher.get(url, headers={"Accept": "application/json"})
     if resp.status in (403, 429, 503):
         raise BlockedError(f"http {resp.status} on {what}")
-    if resp.status in (404, 410):
+    if 400 <= resp.status < 500 and resp.status != 408:
         raise AtsBoardGone(f"{what} http {resp.status}")
     if not resp.ok:
         raise AtsError(f"{what} http {resp.status}")
     try:
         return resp.json()
     except ValueError as e:
-        raise AtsError(f"{what} returned invalid json") from e
+        raise AtsBoardGone(f"{what} returned a non-JSON response") from e
 
 
 def require_board(data, key: str, what: str) -> dict:

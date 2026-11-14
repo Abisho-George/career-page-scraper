@@ -23,9 +23,10 @@ class Router:
     """routes: {"https://x/y": spec, "POST https://x/z": spec}; spec = (status, body[, headers]) or
     a callable(request) -> spec. Unknown URLs -> 404. Every request is recorded in .calls."""
 
-    def __init__(self, routes: dict | None = None):
+    def __init__(self, routes: dict | None = None, default_content_type: bool = True):
         self.routes = dict(routes or {})
         self.calls: list[tuple[str, str]] = []
+        self.default_content_type = default_content_type  # False: serve saved headers as they were
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         url = str(request.url)
@@ -44,7 +45,7 @@ class Router:
         if isinstance(body, (dict, list)):
             body = json.dumps(body)
             headers = {"content-type": "application/json", **headers}
-        elif "content-type" not in {k.lower() for k in headers}:
+        elif self.default_content_type and "content-type" not in {k.lower() for k in headers}:
             headers = {"content-type": "text/html; charset=utf-8", **headers}
         return httpx.Response(status, text=body, headers=headers, request=request)
 
@@ -70,23 +71,30 @@ def _replay_headers(headers: dict) -> dict:
     return out
 
 
-def load_recording(folder) -> tuple[Router, dict[str, str], dict]:
+def load_recording(folder) -> tuple[Router, dict[str, dict], dict]:
     """Turn a folder written by `main.py company <domain> --save-fixtures` back into
-    (Router serving exactly those responses, {url: rendered html}, summary dict).
-    Repeated requests to one URL get the saved responses in order (the last one repeats);
-    POSTs with several saved bodies (e.g. Workday pages) are matched on the request body;
-    saved network errors are raised again; anything not saved is a 404."""
+    (Router serving exactly those responses, {requested url: rendered page}, summary dict).
+
+    Each (method, url, request body) gets its saved responses in order, the last one repeating,
+    so a request that failed once and succeeded on retry replays the same way. Saved network
+    errors are raised again; anything not saved is a 404. Headers are served as saved (no
+    default content-type is added). A rendered page is {"text", "status", "headers", "final_url"}."""
     folder = Path(folder)
     index = json.loads((folder / "index.json").read_text(encoding="utf-8"))
     summary_path = folder / "summary.json"
     summary = json.loads(summary_path.read_text(encoding="utf-8")) if summary_path.exists() else {}
-    grouped: dict[str, list[dict]] = {}
-    renders: dict[str, str] = {}
+    queues: dict[tuple[str, str, str | None], list[dict]] = {}
+    urls: dict[str, set[str]] = {}
+    renders: dict[str, dict] = {}
     for e in index["entries"]:
         if e["kind"] == "rendered":
-            renders[e["url"]] = (folder / e["file"]).read_text(encoding="utf-8")
-        else:
-            grouped.setdefault(f"{e['method']} {e['url']}", []).append(e)
+            renders[e["url"]] = {"text": (folder / e["file"]).read_text(encoding="utf-8"), "status": e["status"],
+                                 "headers": e.get("headers") or {}, "final_url": e.get("final_url") or e["url"]}
+            continue
+        url = str(httpx.URL(e["url"]))
+        body = e.get("request_body") if e["method"] != "GET" else None
+        queues.setdefault((e["method"], url, body), []).append(e)
+        urls.setdefault(f"{e['method']} {url}", set()).add(url)
 
     def spec_for(e):
         if e["kind"] == "error":
@@ -96,17 +104,13 @@ def load_recording(folder) -> tuple[Router, dict[str, str], dict]:
             return exc(f"replayed {e.get('error')}")
         return (e["status"], (folder / e["file"]).read_text(encoding="utf-8"), _replay_headers(e["headers"]))
 
-    def responder(entries):
-        queue = list(entries)
+    def respond(request):
+        body = None
+        if request.method != "GET":
+            body = request.content.decode("utf-8", "replace") if request.content else None
+        queue = queues.get((request.method, str(request.url), body))
+        if not queue:
+            return (404, "")
+        return spec_for(queue.pop(0) if len(queue) > 1 else queue[0])
 
-        def respond(request):
-            if request.method == "POST" and len({x["request_body"] for x in entries}) > 1:
-                body = request.content.decode("utf-8", "replace")
-                for x in entries:
-                    if x["request_body"] == body:
-                        return spec_for(x)
-                return (404, "")
-            return spec_for(queue.pop(0) if len(queue) > 1 else queue[0])
-        return respond
-
-    return Router({key: responder(entries) for key, entries in grouped.items()}), renders, summary
+    return Router({key: respond for key in urls}, default_content_type=False), renders, summary

@@ -161,22 +161,33 @@ def cmd_company(args) -> int:
     if not domain:
         print("invalid domain")
         return 2
-    conn = db.connect()
     recorder = None
     if args.save_fixtures:
         # Record the whole path (discovery included) from a clean state, in a throwaway database:
-        # data/jobs.db is not touched, and the recording replays the same way in a test.
-        known = db.get_company(conn, domain)
+        # data/jobs.db is only read (never created or migrated), and the recording replays the
+        # same way in a test.
+        known = None
+        if config.DB_PATH.exists():
+            ro = sqlite3.connect(f"file:{config.DB_PATH}?mode=ro", uri=True)
+            ro.row_factory = sqlite3.Row
+            try:
+                known = ro.execute("SELECT name, careers_url, careers_url_source FROM companies WHERE website = ?",
+                                   (domain,)).fetchone()
+            except sqlite3.Error:
+                known = None
+            finally:
+                ro.close()
         sheet_url = args.careers_url or (known["careers_url"] if known and known["careers_url_source"] == "sheet" else "")
         name = known["name"] if known else domain
-        conn.close()
         conn = db.connect(":memory:")
         db.upsert_company(conn, name, domain, sheet_url)
         conn.commit()
         recorder = FixtureRecorder(LIVE_DIR / domain)
-    elif db.get_company(conn, domain) is None or args.careers_url:
-        db.upsert_company(conn, domain, domain, args.careers_url or "")
-        conn.commit()
+    else:
+        conn = db.connect()
+        if db.get_company(conn, domain) is None or args.careers_url:
+            db.upsert_company(conn, domain, domain, args.careers_url or "")
+            conn.commit()
     company = db.get_company(conn, domain)
     open_run = db.get_open_run(conn)
     # join an unfinished run if there is one; otherwise record a one-company run
