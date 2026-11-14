@@ -55,3 +55,58 @@ class Router:
 
     def urls(self) -> list[str]:
         return [u for _, u in self.calls]
+
+
+# ---------------------------------------------------------------- replaying a saved live run
+
+_DROP_HEADERS = {"content-encoding", "content-length", "transfer-encoding", "connection", "keep-alive"}
+
+
+def _replay_headers(headers: dict) -> dict:
+    out = {k: v for k, v in (headers or {}).items() if k.lower() not in _DROP_HEADERS}
+    for k in list(out):
+        if k.lower() == "content-type":  # the saved file is UTF-8 whatever the site sent
+            out[k] = out[k].split(";")[0].strip() + "; charset=utf-8"
+    return out
+
+
+def load_recording(folder) -> tuple[Router, dict[str, str], dict]:
+    """Turn a folder written by `main.py company <domain> --save-fixtures` back into
+    (Router serving exactly those responses, {url: rendered html}, summary dict).
+    Repeated requests to one URL get the saved responses in order (the last one repeats);
+    POSTs with several saved bodies (e.g. Workday pages) are matched on the request body;
+    saved network errors are raised again; anything not saved is a 404."""
+    folder = Path(folder)
+    index = json.loads((folder / "index.json").read_text(encoding="utf-8"))
+    summary_path = folder / "summary.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8")) if summary_path.exists() else {}
+    grouped: dict[str, list[dict]] = {}
+    renders: dict[str, str] = {}
+    for e in index["entries"]:
+        if e["kind"] == "rendered":
+            renders[e["url"]] = (folder / e["file"]).read_text(encoding="utf-8")
+        else:
+            grouped.setdefault(f"{e['method']} {e['url']}", []).append(e)
+
+    def spec_for(e):
+        if e["kind"] == "error":
+            exc = getattr(httpx, e.get("error") or "", None)
+            if not (isinstance(exc, type) and issubclass(exc, httpx.HTTPError)):
+                exc = httpx.ConnectError
+            return exc(f"replayed {e.get('error')}")
+        return (e["status"], (folder / e["file"]).read_text(encoding="utf-8"), _replay_headers(e["headers"]))
+
+    def responder(entries):
+        queue = list(entries)
+
+        def respond(request):
+            if request.method == "POST" and len({x["request_body"] for x in entries}) > 1:
+                body = request.content.decode("utf-8", "replace")
+                for x in entries:
+                    if x["request_body"] == body:
+                        return spec_for(x)
+                return (404, "")
+            return spec_for(queue.pop(0) if len(queue) > 1 else queue[0])
+        return respond
+
+    return Router({key: responder(entries) for key, entries in grouped.items()}), renders, summary

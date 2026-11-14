@@ -29,7 +29,8 @@ def looks_js_rendered(html: str) -> bool:
 
 
 class Browser:
-    def __init__(self, max_pages: int = config.MAX_BROWSER_PAGES):
+    def __init__(self, max_pages: int = config.MAX_BROWSER_PAGES, recorder=None):
+        self.recorder = recorder  # saves each rendered page (kind="rendered") for --save-fixtures
         self._sem = asyncio.Semaphore(max_pages)
         self._lock = asyncio.Lock()
         self._pw = None
@@ -89,6 +90,11 @@ class Browser:
                 html = await page.content()
                 status = resp.status if resp else 200
                 headers = {k.lower(): v for k, v in (await resp.all_headers()).items()} if resp else {}
+                if self.recorder is not None:
+                    try:
+                        self.recorder.record("GET", url, status, headers, html, kind="rendered")
+                    except Exception as e:  # noqa: BLE001
+                        log.warning("could not save rendered page %s: %s", url, e)
                 return Response(url=page.url, status=status, headers=headers, text=html)
             finally:
                 await context.close()

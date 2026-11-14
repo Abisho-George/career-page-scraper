@@ -47,6 +47,8 @@ failures (5xx, bad JSON) give `ERROR` and keep the stored token.
 | `ROBOTS_DISALLOWED` | the site's robots.txt asks bots not to fetch the careers page or ATS endpoint; the reason names the path | respect it; ask the company or drop it from the list |
 | `ERROR` | unexpected exception / timeout; reason holds the type | check the logs if it repeats |
 
+For the first run against real sites and the real Sheet, follow [LIVE_TEST.md](LIVE_TEST.md).
+
 ## One-time setup
 
 1. **Python 3.11+** and Git.
@@ -75,6 +77,8 @@ python main.py run --fresh            # start a new run even if the last one cra
 python main.py run --csv companies.csv --no-sheets   # local run without Google Sheets
 python main.py company acme.com       # debug one company with a verbose trace
 python main.py company acme.com --careers-url https://acme.com/about/jobs
+python main.py company acme.com --save-fixtures   # save every raw response to tests/fixtures/live/acme.com/
+python main.py check-sheets           # check .env, key, sharing, enabled APIs and write access
 python main.py sheets                 # rewrite the Sheet tabs from SQLite
 pytest -q                             # offline tests (no network)
 ```

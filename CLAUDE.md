@@ -33,7 +33,8 @@ gspread + google-auth, sqlite3 (stdlib), python-dotenv, pytest, tenacity.
   description, oldest first_seen first, capped at MAX_DETAIL_FETCHES (200) per company per run.
 - Job is a dataclass in scraper/ats/base.py; all extractors return it.
 - Tests use saved fixtures in tests/fixtures; no live network in pytest
-  (use httpx.MockTransport via tests/helpers.py).
+  (use httpx.MockTransport via tests/helpers.py). Recordings copied to tests/fixtures/replay/<domain>/
+  are replayed by tests/test_replay.py (helpers.load_recording).
 - Log one line per company: domain | method | status | jobs | seconds.
 - Raise BlockedError for bot protection and RobotsDisallowedError (its subclass) for robots.txt;
   set the company status from `e.status`, never hard-code it.
@@ -55,5 +56,7 @@ gspread + google-auth, sqlite3 (stdlib), python-dotenv, pytest, tenacity.
 - python main.py run --fresh         # start a new run even if the last one crashed
 - python main.py run --csv companies.csv --no-sheets   # local run without Google Sheets
 - python main.py company acme.com    # debug one company, verbose
+- python main.py company acme.com --save-fixtures   # record raw responses to tests/fixtures/live/acme.com/
+- python main.py check-sheets        # verify Sheets setup (.env, key, sharing, APIs, write access)
 - python main.py sheets              # rebuild the Sheet tabs from SQLite only
 - pytest -q

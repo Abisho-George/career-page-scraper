@@ -45,8 +45,10 @@ class Response:
 class Fetcher:
     def __init__(self, transport: httpx.AsyncBaseTransport | None = None,
                  min_delay: float = config.MIN_DELAY, max_delay: float = config.MAX_DELAY,
-                 respect_robots: bool = True, timeout: float = config.REQUEST_TIMEOUT):
+                 respect_robots: bool = True, timeout: float = config.REQUEST_TIMEOUT,
+                 recorder=None):
         self.min_delay, self.max_delay = min_delay, max_delay
+        self.recorder = recorder  # scraper.recorder.FixtureRecorder: saves every raw response
         self.respect_robots = respect_robots
         self._client = httpx.AsyncClient(
             transport=transport,
@@ -133,6 +135,20 @@ class Fetcher:
         parser.disallow_all = True
         return parser
 
+    def _record(self, r: httpx.Response) -> None:
+        """Save each redirect hop and the final response (never fails the request)."""
+        for hop in [*r.history, r]:
+            try:
+                body = hop.request.content.decode("utf-8", "replace") if hop.request.content else None
+                try:
+                    text = hop.text
+                except Exception:  # noqa: BLE001 - a redirect body we can't decode
+                    text = ""
+                self.recorder.record(hop.request.method, str(hop.request.url), hop.status_code,
+                                     dict(hop.headers), text, request_body=body)
+            except Exception as e:  # noqa: BLE001
+                log.warning("could not save fixture for %s: %s", hop.request.url, e)
+
     async def _throttled(self, method: str, url: str, *, headers: dict | None = None,
                          content: str | None = None) -> Response:
         host = urlsplit(url).hostname or ""
@@ -147,8 +163,18 @@ class Fetcher:
             self.request_log.append((host, time.monotonic()))
             try:
                 r = await self._client.request(method, url, headers=headers, content=content)
+            except httpx.HTTPError as e:
+                if self.recorder is not None:
+                    try:
+                        self.recorder.record(method, url, 0, {}, "", request_body=content, kind="error",
+                                             error=type(e).__name__)
+                    except Exception:  # noqa: BLE001
+                        pass
+                raise
             finally:
                 self._last[host] = time.monotonic()
+        if self.recorder is not None:
+            self._record(r)
         text = r.text
         if len(text) > config.MAX_BODY_BYTES:
             text = text[: config.MAX_BODY_BYTES]

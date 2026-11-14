@@ -13,6 +13,7 @@ from scraper import db, sheets
 from scraper.browser import Browser
 from scraper.fetch import Fetcher
 from scraper.pipeline import Context, process_company
+from scraper.recorder import LIVE_DIR, FixtureRecorder
 
 log = logging.getLogger("main")
 
@@ -156,12 +157,24 @@ def cmd_run(args) -> int:
 
 
 def cmd_company(args) -> int:
-    conn = db.connect()
     domain = sheets.normalize_domain(args.domain)
     if not domain:
         print("invalid domain")
         return 2
-    if db.get_company(conn, domain) is None or args.careers_url:
+    conn = db.connect()
+    recorder = None
+    if args.save_fixtures:
+        # Record the whole path (discovery included) from a clean state, in a throwaway database:
+        # data/jobs.db is not touched, and the recording replays the same way in a test.
+        known = db.get_company(conn, domain)
+        sheet_url = args.careers_url or (known["careers_url"] if known and known["careers_url_source"] == "sheet" else "")
+        name = known["name"] if known else domain
+        conn.close()
+        conn = db.connect(":memory:")
+        db.upsert_company(conn, name, domain, sheet_url)
+        conn.commit()
+        recorder = FixtureRecorder(LIVE_DIR / domain)
+    elif db.get_company(conn, domain) is None or args.careers_url:
         db.upsert_company(conn, domain, domain, args.careers_url or "")
         conn.commit()
     company = db.get_company(conn, domain)
@@ -170,8 +183,8 @@ def cmd_company(args) -> int:
     run_id = open_run["id"] if open_run else db.start_run(conn, fresh=True)[0]
 
     async def go():
-        browser = None if args.no_browser or not config.USE_BROWSER else Browser()
-        async with Fetcher() as fetcher:
+        browser = None if args.no_browser or not config.USE_BROWSER else Browser(recorder=recorder)
+        async with Fetcher(recorder=recorder) as fetcher:
             try:
                 return await process_company(Context(conn, fetcher, browser, run_id), company)
             finally:
@@ -192,7 +205,29 @@ def cmd_company(args) -> int:
         print(f"  - {j['title'][:70]:70} | {(j['location'] or '')[:30]:30} | {j['remote'] or '':7} | {j['apply_url']}")
     if len(jobs) > args.show:
         print(f"  ... {len(jobs) - args.show} more")
+    if recorder is not None:
+        path = recorder.write_summary({
+            "domain": domain,
+            "company_name": row["name"],
+            "status": row["status"],
+            "reason": row["status_reason"] or "",
+            "ats": row["ats"],
+            "ats_token": row["ats_token"],
+            "method": row["method"],
+            "job_count": len(jobs),
+            "careers_url": row["careers_url"],
+            "careers_url_from_sheet": row["careers_url_source"] == "sheet",
+            "browser_used": any(e["kind"] == "rendered" for e in recorder.entries),
+            "sample_jobs": [{"title": j["title"], "location": j["location"], "apply_url": j["apply_url"]}
+                            for j in jobs[:10]],
+        })
+        print(f"\nsaved {len(recorder.entries)} responses + index.json + summary.json to {path.parent}")
+        print("(data/jobs.db was not changed; see LIVE_TEST.md to turn this into a test)")
     return 0
+
+
+def cmd_check_sheets(_args) -> int:
+    return 0 if sheets.check_sheets() else 1
 
 
 def cmd_sheets(_args) -> int:
@@ -218,7 +253,13 @@ def main(argv: list[str] | None = None) -> int:
     c.add_argument("--careers-url", default="", help="use this careers URL (saved as if it came from the sheet)")
     c.add_argument("--no-browser", action="store_true")
     c.add_argument("--show", type=int, default=25, help="how many jobs to print")
+    c.add_argument("--save-fixtures", action="store_true",
+                   help="save every raw response to tests/fixtures/live/<domain>/ (runs from a clean, "
+                        "throwaway database; data/jobs.db is not changed)")
     c.set_defaults(func=cmd_company, verbose=True)
+
+    k = sub.add_parser("check-sheets", help="check the Google Sheets setup (.env, key, sharing, APIs, write access)")
+    k.set_defaults(func=cmd_check_sheets, verbose=False)
 
     s = sub.add_parser("sheets", help="rewrite the Jobs / Company Status / Runs tabs from SQLite")
     s.set_defaults(func=cmd_sheets, verbose=False)
