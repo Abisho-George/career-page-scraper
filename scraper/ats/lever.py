@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from urllib.parse import quote
 
-from scraper.ats.base import AtsBoardGone, Job, get_json, html_to_text, join_nonempty, never_known
+from scraper.ats.base import AtsBoardGone, Job, get_json, html_to_text, join_nonempty, DetailPlan
 
 API = "https://api.lever.co/v0/postings/{token}?mode=json"
 API_EU = "https://api.eu.lever.co/v0/postings/{token}?mode=json"
@@ -54,7 +54,7 @@ def parse(data) -> list[Job]:
     return [map_job(p) for p in data if p.get("text")]
 
 
-async def fetch_jobs(token: str, fetcher, known=never_known) -> list[Job]:
+async def fetch_jobs(token: str, fetcher, plan: DetailPlan | None = None) -> list[Job]:
     if token.startswith("eu/"):
         url = API_EU.format(token=quote(token[3:], safe=""))
     else:

@@ -5,15 +5,14 @@ token = "{tenant}|wd{N}|{site}|site"       -> https://wd{N}.myworkdaysite.com/re
 
 List:   POST {base}/wday/cxs/{tenant}/{site}/jobs  {"appliedFacets":{},"limit":20,"offset":N,"searchText":""}
 Detail: GET  {base}/wday/cxs/{tenant}/{site}{externalPath}
-Detail calls are only made for jobs we don't already have a description for (see `known`),
-capped at MAX_DETAIL_FETCHES per company per run, so the first run of a big tenant fills in over a few days.
+Detail calls follow the DetailPlan: new jobs first, then stored jobs still missing a description
+(oldest first), capped at MAX_DETAIL_FETCHES per company per run, so a big tenant fills in over a few runs.
 """
 from __future__ import annotations
 
 import logging
 
-import config
-from scraper.ats.base import AtsError, Job, get_json, html_to_text, join_nonempty, never_known, require_board
+from scraper.ats.base import AtsError, Job, get_json, html_to_text, join_nonempty, DetailPlan, require_board
 
 log = logging.getLogger(__name__)
 
@@ -67,7 +66,7 @@ def apply_detail(job: Job, d: dict) -> None:
         job.remote = "onsite"
 
 
-async def fetch_jobs(token: str, fetcher, known=never_known) -> list[Job]:
+async def fetch_jobs(token: str, fetcher, plan: DetailPlan | None = None) -> list[Job]:
     api_base, public_base, tenant, site = parse_token(token)
     cxs = f"{api_base}/wday/cxs/{tenant}/{site}"
     jobs: list[Job] = []
@@ -88,11 +87,7 @@ async def fetch_jobs(token: str, fetcher, known=never_known) -> list[Job]:
     if total and len(jobs) < total:
         log.info("workday %s: listed %d of %d postings", token, len(jobs), total)
 
-    details = 0
-    for job in jobs:
-        if details >= config.MAX_DETAIL_FETCHES or known(job.external_id):
-            continue
-        details += 1
+    for job in (plan or DetailPlan()).pick(jobs):
         try:
             apply_detail(job, await get_json(fetcher, f"{cxs}{job.extra['path']}", what="workday detail"))
         except AtsError as e:

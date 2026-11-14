@@ -102,11 +102,11 @@ def _listing_link(page: Response, domain: str) -> str | None:
     return None
 
 
-async def _call_ats(ctx: Context, ats: str, token: str, known) -> tuple[list[Job] | None, AtsError | None]:
+async def _call_ats(ctx: Context, ats: str, token: str, plan) -> tuple[list[Job] | None, AtsError | None]:
     """(jobs, None) on success (jobs may be empty: the ATS says 0), or (None, error).
     BlockedError / RobotsDisallowedError propagate."""
     try:
-        jobs = await MODULES[ats].fetch_jobs(token, ctx.fetcher, known)
+        jobs = await MODULES[ats].fetch_jobs(token, ctx.fetcher, plan)
         log.debug("%s api %s -> %d jobs", ats, token, len(jobs))
         return jobs, None
     except AtsError as e:
@@ -114,9 +114,9 @@ async def _call_ats(ctx: Context, ats: str, token: str, known) -> tuple[list[Job
         return None, e
 
 
-async def _try_ats(ctx: Context, ats: str, token: str, known) -> list[Job] | None:
+async def _try_ats(ctx: Context, ats: str, token: str, plan) -> list[Job] | None:
     """Returns jobs (possibly empty: the ATS says 0) or None when the API doesn't work for this token."""
-    return (await _call_ats(ctx, ats, token, known))[0]
+    return (await _call_ats(ctx, ats, token, plan))[0]
 
 
 async def _run_ladder(ctx: Context, pages: list[Response], domain: str, careers_url: str,
@@ -144,7 +144,7 @@ async def _process(ctx: Context, company: sqlite3.Row) -> Outcome:
 
 async def _run_stages(ctx: Context, company: sqlite3.Row) -> Outcome:
     domain = company["website"]
-    known = diff.known_with_description(ctx.conn, company["id"], domain)
+    plan = diff.detail_plan(ctx.conn, company["id"], domain)
     out = Outcome(status="ERROR", careers_url=company["careers_url"],
                   careers_url_source=company["careers_url_source"],
                   ats=company["ats"], ats_token=company["ats_token"])
@@ -156,7 +156,7 @@ async def _run_stages(ctx: Context, company: sqlite3.Row) -> Outcome:
     old_ats = (company["ats"], company["ats_token"])
     if company["ats"] in MODULES and company["ats_token"]:
         try:
-            jobs, err = await _call_ats(ctx, company["ats"], company["ats_token"], known)
+            jobs, err = await _call_ats(ctx, company["ats"], company["ats_token"], plan)
         except BlockedError as e:  # includes RobotsDisallowedError
             return Outcome(**{**out.__dict__, "status": e.status, "reason": e.reason})
         if err is None:
@@ -215,7 +215,7 @@ async def _run_stages(ctx: Context, company: sqlite3.Row) -> Outcome:
             ats0, token0 = detect_ats(url, "")
             if ats0 in MODULES and token0 and (ats0, token0) != old_ats:
                 try:
-                    jobs = await _try_ats(ctx, ats0, token0, known)
+                    jobs = await _try_ats(ctx, ats0, token0, plan)
                 except BlockedError as e:
                     raise _Stop(Outcome(**{**out.__dict__, "status": e.status, "reason": e.reason}))
                 if jobs is not None:
@@ -289,7 +289,7 @@ async def _run_stages(ctx: Context, company: sqlite3.Row) -> Outcome:
         ats_note = f"careers page still links to the old {ats} board {token!r}"
     elif ats in MODULES and token:
         try:
-            jobs = await _try_ats(ctx, ats, token, known)
+            jobs = await _try_ats(ctx, ats, token, plan)
         except BlockedError as e:
             return Outcome(**{**out.__dict__, "status": e.status, "reason": e.reason})
         if jobs is not None:
@@ -319,7 +319,7 @@ async def _run_stages(ctx: Context, company: sqlite3.Row) -> Outcome:
             if ats_r in MODULES and tok_r and (ats_r, tok_r) not in ((ats, token), old_ats if switched else (None, None)):
                 out.ats, out.ats_token = ats_r, tok_r
                 try:
-                    r_jobs = await _try_ats(ctx, ats_r, tok_r, known)
+                    r_jobs = await _try_ats(ctx, ats_r, tok_r, plan)
                 except BlockedError as e:
                     return Outcome(**{**out.__dict__, "status": e.status, "reason": e.reason})
                 if r_jobs is not None:

@@ -8,7 +8,7 @@ from dataclasses import dataclass
 
 import config
 from scraper import db
-from scraper.ats.base import Job
+from scraper.ats.base import DetailPlan, Job
 
 log = logging.getLogger(__name__)
 
@@ -21,12 +21,18 @@ def job_id_for(domain: str, job: Job) -> str:
     return make_job_id(domain, job.external_id or job.apply_url)
 
 
-def known_with_description(conn: sqlite3.Connection, company_id: int, domain: str):
-    """Predicate for ATS modules: True if we already store this job with a description,
-    so the (slow) detail call can be skipped."""
-    ids = {r[0] for r in conn.execute(
-        "SELECT job_id FROM jobs WHERE company_id = ? AND description != ''", (company_id,))}
-    return lambda external_id: make_job_id(domain, external_id) in ids
+def detail_plan(conn: sqlite3.Connection, company_id: int, domain: str) -> DetailPlan:
+    """What the ATS modules should spend their detail-call budget on for this company:
+    new jobs first, then stored jobs with an empty description, oldest first_seen first."""
+    full: set[str] = set()
+    empty: dict[str, str] = {}
+    for job_id, desc, first_seen in conn.execute(
+            "SELECT job_id, description, first_seen FROM jobs WHERE company_id = ?", (company_id,)):
+        if desc:
+            full.add(job_id)
+        else:
+            empty[job_id] = first_seen or ""
+    return DetailPlan(job_key=lambda job: job_id_for(domain, job), stored_empty=empty, stored_full=full)
 
 
 @dataclass

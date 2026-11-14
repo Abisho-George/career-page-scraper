@@ -127,8 +127,10 @@ Windows Task Scheduler: create a basic task, trigger *Daily*, action *Start a pr
 All optional settings are in `.env.example`: delays (2–5 s per domain), timeouts, parallelism
 (5 companies, 2 browser pages), `COMPANY_TIMEOUT` (hard cap per company),
 `HEURISTIC_MAX_LINKS` (150), `MAX_DETAIL_FETCHES` (detail calls per company per run for Workday,
-SmartRecruiters and Workable; only jobs without a stored description are fetched, so a big Workday
-tenant fills in over a few runs), `USE_BROWSER`, `BROWSER_EXECUTABLE`, and `JOBS_TAB_CLOSED_DAYS`.
+SmartRecruiters and Workable; each run spends the budget on new jobs first, then on stored jobs
+whose description is still empty, oldest first, so a 500-job Workday tenant is fully described
+after 3 runs and a failed detail call is retried later), `USE_BROWSER`, `BROWSER_EXECUTABLE`, and
+`JOBS_TAB_CLOSED_DAYS`.
 
 ## Politeness and rules
 

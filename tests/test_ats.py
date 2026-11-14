@@ -4,7 +4,7 @@ import json
 import pytest
 
 from scraper.ats import ashby, greenhouse, lever, recruitee, smartrecruiters, workable, workday
-from scraper.ats.base import AtsError, BlockedError
+from scraper.ats.base import AtsError, BlockedError, DetailPlan
 from tests.helpers import Router, fixture_json
 
 
@@ -84,7 +84,7 @@ def test_smartrecruiters_pagination_and_detail():
 def test_smartrecruiters_skips_known_details():
     base = "https://api.smartrecruiters.com/v1/companies/Acme/postings"
     r = Router({f"{base}?limit=100&offset=0": (200, {**fixture_json("smartrecruiters_page1.json"), "totalFound": 1})})
-    run(r, smartrecruiters, "Acme", known=lambda ext: True)
+    run(r, smartrecruiters, "Acme", plan=DetailPlan(stored_full={"744000012345678"}))
     assert not any("/postings/7440" in u for u in r.urls())
 
 

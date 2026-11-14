@@ -26,8 +26,11 @@ gspread + google-auth, sqlite3 (stdlib), python-dotenv, pytest, tenacity.
 4. Playwright render, then repeat 2 and 3 (browser.py)
 
 ## Conventions
-- Every ATS module exposes: async fetch_jobs(token: str, fetcher) -> list[Job]
+- Every ATS module exposes: async fetch_jobs(token: str, fetcher, plan: DetailPlan | None = None) -> list[Job]
   (async because the whole pipeline runs on asyncio; `fetcher` is the shared polite client).
+  Modules that need one call per job for the description (Workday, SmartRecruiters, Workable v3)
+  call details only for `plan.pick(jobs)`: new jobs first, then stored jobs with an empty
+  description, oldest first_seen first, capped at MAX_DETAIL_FETCHES (200) per company per run.
 - Job is a dataclass in scraper/ats/base.py; all extractors return it.
 - Tests use saved fixtures in tests/fixtures; no live network in pytest
   (use httpx.MockTransport via tests/helpers.py).

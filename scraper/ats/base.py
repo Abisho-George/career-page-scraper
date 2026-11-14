@@ -112,8 +112,38 @@ def require_board(data, key: str, what: str) -> dict:
     return data
 
 
-def never_known(_external_id: str) -> bool:
-    return False
+class DetailPlan:
+    """Which jobs get a (slow) per-job detail call this run, within the budget
+    (config.MAX_DETAIL_FETCHES per company per run, Workday / SmartRecruiters / Workable):
+
+      1. jobs we have never stored (new), in listing order;
+      2. stored jobs whose description is still empty, oldest first_seen first.
+
+    Jobs that already have a description are skipped. A detail call that fails leaves the
+    description empty, so that job is retried on a later run. Built by diff.detail_plan()."""
+
+    def __init__(self, job_key=None, stored_empty: dict[str, str] | None = None,
+                 stored_full: set[str] | None = None, limit: int | None = None):
+        self.job_key = job_key or (lambda job: job.external_id or job.apply_url)
+        self.stored_empty = stored_empty or {}    # job key -> first_seen
+        self.stored_full = stored_full or set()    # job keys that already have a description
+        self.limit = config.MAX_DETAIL_FETCHES if limit is None else limit
+
+    def pick(self, jobs: list[Job]) -> list[Job]:
+        new: list[Job] = []
+        backlog: list[tuple[str, int, Job]] = []
+        seen: set[str] = set()
+        for i, job in enumerate(jobs):
+            key = self.job_key(job)
+            if key in seen or key in self.stored_full:
+                continue
+            seen.add(key)
+            if key in self.stored_empty:
+                backlog.append((self.stored_empty[key] or "", i, job))
+            else:
+                new.append(job)
+        backlog.sort(key=lambda t: (t[0], t[1]))
+        return (new + [job for _, _, job in backlog])[: max(self.limit, 0)]
 
 
 def join_nonempty(*parts: str | None, sep: str = ", ") -> str:

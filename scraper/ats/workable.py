@@ -11,8 +11,7 @@ from __future__ import annotations
 import logging
 from urllib.parse import quote
 
-import config
-from scraper.ats.base import AtsError, Job, get_json, html_to_text, join_nonempty, never_known, require_board
+from scraper.ats.base import AtsError, Job, get_json, html_to_text, join_nonempty, DetailPlan, require_board
 
 log = logging.getLogger(__name__)
 
@@ -65,7 +64,7 @@ def map_v3_job(j: dict, token: str) -> Job:
     )
 
 
-async def _v3(token: str, fetcher, known) -> list[Job]:
+async def _v3(token: str, fetcher, plan: DetailPlan | None) -> list[Job]:
     tok = quote(token, safe="")
     jobs: list[Job] = []
     payload: dict = {"query": "", "location": [], "department": [], "worktype": [], "remote": []}
@@ -77,11 +76,7 @@ async def _v3(token: str, fetcher, known) -> list[Job]:
         if not nxt:
             break
         payload = {**payload, "token": nxt}
-    details = 0
-    for job in jobs:
-        if details >= config.MAX_DETAIL_FETCHES or known(job.external_id):
-            continue
-        details += 1
+    for job in (plan or DetailPlan()).pick(jobs):
         try:
             d = await get_json(fetcher, V2_DETAIL.format(token=tok, shortcode=job.external_id),
                                what="workable detail")
@@ -92,11 +87,11 @@ async def _v3(token: str, fetcher, known) -> list[Job]:
     return jobs
 
 
-async def fetch_jobs(token: str, fetcher, known=never_known) -> list[Job]:
+async def fetch_jobs(token: str, fetcher, plan: DetailPlan | None = None) -> list[Job]:
     try:
         data = await get_json(fetcher, WIDGET.format(token=quote(token, safe="")), what="workable api")
         data = require_board(data, "jobs", "workable api")
         return [map_widget_job(j, token) for j in data.get("jobs") or [] if j.get("title")]
     except AtsError as e:  # includes AtsBoardGone: the v3 endpoint decides
         log.debug("workable widget failed for %s (%s); trying v3", token, e)
-    return await _v3(token, fetcher, known)
+    return await _v3(token, fetcher, plan)

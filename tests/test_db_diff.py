@@ -73,8 +73,9 @@ def test_empty_field_does_not_overwrite(conn):
     db.upsert_job(conn, cid, jid, {"title": "A2", "description": "", "apply_url": "u"}, "t2")
     row = conn.execute("SELECT title, description FROM jobs WHERE job_id = ?", (jid,)).fetchone()
     assert tuple(row) == ("A2", "long text")
-    known = diff.known_with_description(conn, cid, "x.com")
-    assert known("a") and not known("b")
+    plan = diff.detail_plan(conn, cid, "x.com")
+    picked = plan.pick([Job(title="A", apply_url="u", external_id="a"), Job(title="B", apply_url="v", external_id="b")])
+    assert [j.external_id for j in picked] == ["b"]  # 'a' already has a description
 
 
 def test_finish_run_counts(conn):

@@ -4,8 +4,7 @@ from __future__ import annotations
 import logging
 from urllib.parse import quote
 
-import config
-from scraper.ats.base import AtsError, Job, get_json, html_to_text, join_nonempty, never_known, require_board
+from scraper.ats.base import AtsError, Job, get_json, html_to_text, join_nonempty, DetailPlan, require_board
 
 log = logging.getLogger(__name__)
 
@@ -51,7 +50,7 @@ def apply_detail(job: Job, d: dict) -> None:
         job.apply_url = d["postingUrl"]
 
 
-async def fetch_jobs(token: str, fetcher, known=never_known) -> list[Job]:
+async def fetch_jobs(token: str, fetcher, plan: DetailPlan | None = None) -> list[Job]:
     tok = quote(token, safe="")
     jobs: list[Job] = []
     offset = 0
@@ -64,11 +63,7 @@ async def fetch_jobs(token: str, fetcher, known=never_known) -> list[Job]:
         offset += len(content)
         if not content or offset >= total or offset >= 5000:
             break
-    details = 0
-    for job in jobs:
-        if details >= config.MAX_DETAIL_FETCHES or known(job.external_id):
-            continue
-        details += 1
+    for job in (plan or DetailPlan()).pick(jobs):
         url = job.extra.get("ref") or DETAIL.format(token=tok, id=quote(job.external_id, safe=""))
         try:
             apply_detail(job, await get_json(fetcher, url, what="smartrecruiters detail"))
