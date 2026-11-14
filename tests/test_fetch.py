@@ -3,7 +3,7 @@ import asyncio
 import httpx
 import pytest
 
-from scraper.ats.base import BlockedError
+from scraper.ats.base import BlockedError, RobotsDisallowedError
 from tests.helpers import Router
 
 ROBOTS = "User-agent: *\nDisallow: /private\n\nUser-agent: JobScraperBot\nDisallow: /nobots\n"
@@ -38,9 +38,10 @@ def test_robots_disallow_raises_blocked():
 
     async def go():
         async with r.fetcher() as f:
-            with pytest.raises(BlockedError) as e:
+            with pytest.raises(RobotsDisallowedError) as e:
                 await f.get("https://a.com/nobots/x")
-            assert "robots.txt" in e.value.reason
+            assert e.value.reason == "robots.txt disallows /nobots/x"
+            assert e.value.status == "ROBOTS_DISALLOWED" and isinstance(e.value, BlockedError)
             # our own group overrides "*", so /private is allowed for us here
             await f.get("https://a.com/private/y")
             with pytest.raises(BlockedError):

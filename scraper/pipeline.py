@@ -134,7 +134,7 @@ async def _process(ctx: Context, company: sqlite3.Row) -> Outcome:
         try:
             jobs = await _try_ats(ctx, company["ats"], company["ats_token"], known)
         except BlockedError as e:
-            return Outcome(**{**out.__dict__, "status": "BLOCKED", "reason": e.reason})
+            return Outcome(**{**out.__dict__, "status": e.status, "reason": e.reason})
         if jobs is not None:
             out.status, out.method, out.jobs = "OK", "ats_api", jobs
             return out
@@ -151,6 +151,8 @@ async def _process(ctx: Context, company: sqlite3.Row) -> Outcome:
         if not d.url:
             if d.blocked:
                 raise _Stop(Outcome(**{**out.__dict__, "status": "BLOCKED", "reason": d.blocked}))
+            if d.robots:
+                raise _Stop(Outcome(**{**out.__dict__, "status": "ROBOTS_DISALLOWED", "reason": d.robots}))
             raise _Stop(Outcome(**{**out.__dict__, "status": "NO_CAREERS_PAGE", "reason": d.reason,
                                    "careers_url": None, "careers_url_source": None}))
         return d.url, d.page
@@ -168,7 +170,7 @@ async def _process(ctx: Context, company: sqlite3.Row) -> Outcome:
                 try:
                     jobs = await _try_ats(ctx, ats0, token0, known)
                 except BlockedError as e:
-                    raise _Stop(Outcome(**{**out.__dict__, "status": "BLOCKED", "reason": e.reason}))
+                    raise _Stop(Outcome(**{**out.__dict__, "status": e.status, "reason": e.reason}))
                 if jobs is not None:
                     out.status, out.method, out.jobs, out.ats, out.ats_token = "OK", "ats_api", jobs, ats0, token0
                     return out
@@ -178,7 +180,7 @@ async def _process(ctx: Context, company: sqlite3.Row) -> Outcome:
             try:
                 page = await _get_page(ctx, url)
             except BlockedError as e:
-                raise _Stop(Outcome(**{**out.__dict__, "status": "BLOCKED", "reason": e.reason}))
+                raise _Stop(Outcome(**{**out.__dict__, "status": e.status, "reason": e.reason}))
             except httpx.HTTPError as e:
                 if source == "discovered" and not rediscovered:
                     page = None
@@ -194,7 +196,7 @@ async def _process(ctx: Context, company: sqlite3.Row) -> Outcome:
                     try:
                         page = await _get_page(ctx, url)
                     except BlockedError as e:
-                        raise _Stop(Outcome(**{**out.__dict__, "status": "BLOCKED", "reason": e.reason}))
+                        raise _Stop(Outcome(**{**out.__dict__, "status": e.status, "reason": e.reason}))
     except _Stop as s:
         return s.outcome
 
@@ -232,7 +234,7 @@ async def _process(ctx: Context, company: sqlite3.Row) -> Outcome:
         try:
             jobs = await _try_ats(ctx, ats, token, known)
         except BlockedError as e:
-            return Outcome(**{**out.__dict__, "status": "BLOCKED", "reason": e.reason})
+            return Outcome(**{**out.__dict__, "status": e.status, "reason": e.reason})
         if jobs is not None:
             out.status, out.method, out.jobs = "OK", "ats_api", jobs
             return out
@@ -262,7 +264,7 @@ async def _process(ctx: Context, company: sqlite3.Row) -> Outcome:
                 try:
                     r_jobs = await _try_ats(ctx, ats_r, tok_r, known)
                 except BlockedError as e:
-                    return Outcome(**{**out.__dict__, "status": "BLOCKED", "reason": e.reason})
+                    return Outcome(**{**out.__dict__, "status": e.status, "reason": e.reason})
                 if r_jobs is not None:
                     out.status, out.method, out.jobs = "OK", "ats_api", r_jobs
                     return out
@@ -322,8 +324,8 @@ async def process_company(ctx: Context, company: sqlite3.Row) -> Outcome:
         outcome = await asyncio.wait_for(_process(ctx, company), timeout=config.COMPANY_TIMEOUT)
     except asyncio.TimeoutError:
         outcome = Outcome(status="ERROR", reason=f"timeout after {int(config.COMPANY_TIMEOUT)}s")
-    except BlockedError as e:
-        outcome = Outcome(status="BLOCKED", reason=e.reason)
+    except BlockedError as e:  # includes RobotsDisallowedError
+        outcome = Outcome(status=e.status, reason=e.reason)
     except Exception as e:  # noqa: BLE001
         log.exception("%s crashed", domain)
         outcome = Outcome(status="ERROR", reason=f"{type(e).__name__}: {str(e)[:150]}")

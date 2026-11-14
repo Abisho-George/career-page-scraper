@@ -16,7 +16,8 @@ from scraper.pipeline import Context, process_company
 
 log = logging.getLogger("main")
 
-STATUS_ORDER = {"ERROR": 0, "BLOCKED": 1, "NO_CAREERS_PAGE": 2, "NO_JOBS_FOUND": 3, "PENDING": 4, "OK": 5}
+STATUS_ORDER = {"ERROR": 0, "BLOCKED": 1, "ROBOTS_DISALLOWED": 2, "NO_CAREERS_PAGE": 3, "NO_JOBS_FOUND": 4,
+                "PENDING": 5, "OK": 6}
 
 
 def setup_logging(verbose: bool = False) -> None:
@@ -68,8 +69,8 @@ def build_tabs(conn: sqlite3.Connection) -> dict[str, list[list]]:
                             c["careers_url"] or "", c["ats"] or "", c["method"] or "", c["last_checked"] or ""])
 
     runs = conn.execute("SELECT * FROM runs ORDER BY id DESC").fetchall()
-    run_cols = ["id", "started_at", "finished_at", "companies_total", "ok", "blocked", "failed", "no_jobs",
-                "no_careers", "jobs_new", "jobs_closed", "ok_ats_api", "ok_jsonld", "ok_heuristic", "ok_browser",
+    run_cols = ["id", "started_at", "finished_at", "companies_total", "ok", "blocked", "robots_disallowed", "failed",
+                "no_jobs", "no_careers", "jobs_new", "jobs_closed", "ok_ats_api", "ok_jsonld", "ok_heuristic", "ok_browser",
                 "top_no_jobs_ats"]
     run_rows = [run_cols] + [[r[c] if r[c] is not None else "" for c in run_cols] for r in runs]
     return {"Jobs": job_rows, "Company Status": status_rows, "Runs": run_rows}
@@ -146,6 +147,7 @@ def cmd_run(args) -> int:
     sheets_ok = True if args.no_sheets else write_sheets(conn)
     print(
         f"\nRun {run['id']}: {run['companies_total']} companies | OK {run['ok']} | BLOCKED {run['blocked']} | "
+        f"ROBOTS_DISALLOWED {run['robots_disallowed']} | "
         f"NO_JOBS_FOUND {run['no_jobs']} | NO_CAREERS_PAGE {run['no_careers']} | ERROR {run['failed']} | "
         f"jobs new {run['jobs_new']}, closed {run['jobs_closed']}"
         f"{'' if sheets_ok else ' | SHEETS NOT UPDATED (see log)'}"

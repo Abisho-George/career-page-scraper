@@ -10,7 +10,7 @@ import httpx
 from selectolax.lexbor import LexborHTMLParser
 
 import config
-from scraper.ats.base import BlockedError
+from scraper.ats.base import BlockedError, RobotsDisallowedError
 from scraper.blockcheck import is_blocked
 from scraper.detect import collect_urls, is_ats_url
 from scraper.fetch import Fetcher, Response
@@ -37,6 +37,7 @@ class Discovery:
     page: Response | None = None   # the careers page response when we already fetched it
     blocked: str = ""              # first bot-protection reason seen during discovery
     homepage: Response | None = None
+    robots: str = ""               # first robots.txt disallow seen during discovery
 
 
 def same_site(url: str, domain: str) -> bool:
@@ -107,19 +108,22 @@ def best_homepage_link(home: Response, domain: str) -> str | None:
     return best
 
 
-async def _try(fetcher: Fetcher, url: str) -> tuple[Response | None, str]:
-    """Fetch, returning (response, blocked_reason). Network errors -> (None, '')."""
+async def _try(fetcher: Fetcher, url: str) -> tuple[Response | None, str, str]:
+    """Fetch, returning (response, bot_protection_reason, robots_reason).
+    Network errors -> (None, '', '')."""
     try:
         resp = await fetcher.get(url)
+    except RobotsDisallowedError as e:
+        return None, "", e.reason
     except BlockedError as e:
-        return None, e.reason
+        return None, e.reason, ""
     except httpx.HTTPError as e:
         log.debug("discover %s failed: %s", url, type(e).__name__)
-        return None, ""
+        return None, "", ""
     blocked, reason = is_blocked(resp)
     if blocked and resp.status != 404:
-        return resp, reason
-    return resp, ""
+        return resp, reason, ""
+    return resp, "", ""
 
 
 async def discover(domain: str, fetcher: Fetcher, sheet_url: str | None = None) -> Discovery:
@@ -127,6 +131,7 @@ async def discover(domain: str, fetcher: Fetcher, sheet_url: str | None = None) 
         return Discovery(sheet_url, "from sheet")
 
     first_blocked = ""
+    first_robots = ""
     hosts = [domain]
     tried: set[str] = set()
 
@@ -138,13 +143,16 @@ async def discover(domain: str, fetcher: Fetcher, sheet_url: str | None = None) 
         if url in tried:
             continue
         tried.add(url)
-        resp, blocked = await _try(fetcher, url)
-        if resp is None and not blocked and "{host}" in tmpl and hosts[0] == domain:
+        resp, blocked, robots = await _try(fetcher, url)
+        if resp is None and not blocked and not robots and "{host}" in tmpl and hosts[0] == domain:
             # apex domain may not resolve; switch to www. for the remaining probes
             hosts[0] = f"www.{domain}"
             url = tmpl.format(host=hosts[0])
             tried.add(url)
-            resp, blocked = await _try(fetcher, url)
+            resp, blocked, robots = await _try(fetcher, url)
+        if robots:
+            first_robots = first_robots or robots
+            continue
         if blocked:
             first_blocked = first_blocked or blocked
             continue
@@ -156,21 +164,24 @@ async def discover(domain: str, fetcher: Fetcher, sheet_url: str | None = None) 
                 return Discovery(resp.url, f"probe {urlsplit(url).netloc}{urlsplit(url).path}", page=resp)
 
     # 2) homepage links
-    home, blocked = await _try(fetcher, f"https://{hosts[0]}/")
-    if home is None and not blocked and hosts[0] == domain:
-        home, blocked = await _try(fetcher, f"https://www.{domain}/")
+    home, blocked, robots = await _try(fetcher, f"https://{hosts[0]}/")
+    if home is None and not blocked and not robots and hosts[0] == domain:
+        home, blocked, robots = await _try(fetcher, f"https://www.{domain}/")
+    found = dict(blocked=first_blocked, robots=first_robots)
     if blocked:
-        first_blocked = first_blocked or blocked
-        return Discovery(None, f"homepage blocked: {blocked}", blocked=first_blocked)
+        found["blocked"] = first_blocked or blocked
+        return Discovery(None, f"homepage blocked: {blocked}", **found)
+    if robots:
+        found["robots"] = first_robots or robots
+        return Discovery(None, f"homepage {robots}", **found)
     if home is None:
-        return Discovery(None, "homepage unreachable", blocked=first_blocked)
+        return Discovery(None, "homepage unreachable", **found)
     if not home.ok:
-        return Discovery(None, f"homepage http {home.status}", blocked=first_blocked, homepage=home)
+        return Discovery(None, f"homepage http {home.status}", homepage=home, **found)
     link = best_homepage_link(home, domain)
     if link:
-        return Discovery(link, "homepage link", blocked=first_blocked, homepage=home)
-    reason = "no careers link on homepage"
-    return Discovery(None, reason, blocked=first_blocked, homepage=home)
+        return Discovery(link, "homepage link", homepage=home, **found)
+    return Discovery(None, "no careers link on homepage", homepage=home, **found)
 
 
 async def find_careers_url(domain: str, fetcher: Fetcher, sheet_url: str | None = None) -> tuple[str | None, str]:

@@ -80,11 +80,37 @@ def test_sheet_url_that_is_blocked(conn):
     assert company(conn, "bigbrand.com")["status"] == "BLOCKED"
 
 
-def test_robots_disallow_is_blocked(conn):
-    routes = {**ROUTES, "https://acme.com/robots.txt": (200, "User-agent: *\nDisallow: /\n", {"content-type": "text/plain"})}
+ROBOTS_ALL = (200, "User-agent: *\nDisallow: /\n", {"content-type": "text/plain"})
+
+
+def test_robots_disallow_on_careers_page(conn):
+    routes = {**ROUTES, "https://acme.com/robots.txt": ROBOTS_ALL}
     process(conn, Router(routes), "acme.com", careers_url="https://acme.com/careers")
     c = company(conn, "acme.com")
-    assert c["status"] == "BLOCKED" and c["status_reason"].startswith("robots.txt disallows")
+    assert (c["status"], c["status_reason"]) == ("ROBOTS_DISALLOWED", "robots.txt disallows /careers")
+
+
+def test_robots_disallow_on_ats_endpoint(conn):
+    process(conn, Router(ROUTES), "acme.com")  # learns the greenhouse token
+    routes = {**ROUTES, "https://boards-api.greenhouse.io/robots.txt": ROBOTS_ALL}
+    process(conn, Router(routes), "acme.com")
+    c = company(conn, "acme.com")
+    assert (c["status"], c["status_reason"]) == ("ROBOTS_DISALLOWED", "robots.txt disallows /v1/boards/acme/jobs")
+    assert c["job_count"] == 2  # nothing closed
+
+
+def test_robots_disallow_during_discovery(conn):
+    process(conn, Router({"https://acme.com/robots.txt": ROBOTS_ALL}), "acme.com")
+    c = company(conn, "acme.com")
+    assert (c["status"], c["status_reason"]) == ("ROBOTS_DISALLOWED", "robots.txt disallows /careers")
+
+
+def test_bot_protection_wins_over_robots_in_discovery(conn):
+    routes = {**{k: v for k, v in ROUTES.items() if k.startswith("https://bigbrand.com")},
+              "https://bigbrand.com/robots.txt": (200, "User-agent: *\nDisallow: /careers\n", {"content-type": "text/plain"})}
+    process(conn, Router(routes), "bigbrand.com")
+    c = company(conn, "bigbrand.com")
+    assert (c["status"], c["status_reason"]) == ("BLOCKED", "cloudflare challenge")
 
 
 def test_custom_page_heuristic(conn):
@@ -237,6 +263,7 @@ def test_full_run_twice_is_stable(cli):
     assert run2["id"] != run1["id"] and (run2["jobs_new"], run2["jobs_closed"]) == (0, 0)
     tabs = main.build_tabs(conn)
     assert len(tabs["Jobs"]) == 8 and tabs["Company Status"][1][2] == "BLOCKED"  # problems first
+    assert "robots_disallowed" in tabs["Runs"][0]
     assert len(tabs["Runs"]) == 3 and tabs["Runs"][1][0] == run2["id"]  # newest first
 
 
@@ -291,3 +318,18 @@ def test_ats_careers_url_goes_straight_to_api(conn):
     assert (c["status"], c["ats"], c["ats_token"], c["job_count"]) == ("OK", "lever", "hooli", 2)
     assert c["careers_url"] == "https://jobs.lever.co/hooli"
     assert not any(u.startswith("https://jobs.lever.co/") for u in r.urls())  # board page never fetched
+
+
+def test_robots_company_counted_and_sorted(cli, capsys, monkeypatch):
+    csv, _ = cli
+    routes = {**ROUTES, "https://nothing.com/robots.txt": ROBOTS_ALL}
+    monkeypatch.setattr(main, "Fetcher", lambda *a, **k: Router(routes).fetcher())
+    m = main
+    assert m.main(["run", "--csv", str(csv), "--no-sheets"]) == 0
+    assert statuses()["nothing.com"] == "ROBOTS_DISALLOWED"
+    out = capsys.readouterr().out
+    assert "BLOCKED 1 | ROBOTS_DISALLOWED 1 |" in out
+    conn = db.connect()
+    order = [row[2] for row in m.build_tabs(conn)["Company Status"][1:]]
+    assert order[:2] == ["BLOCKED", "ROBOTS_DISALLOWED"]
+    assert conn.execute("SELECT robots_disallowed FROM runs").fetchone()[0] == 1

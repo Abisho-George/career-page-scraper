@@ -32,7 +32,19 @@ gspread + google-auth, sqlite3 (stdlib), python-dotenv, pytest, tenacity.
 - Tests use saved fixtures in tests/fixtures; no live network in pytest
   (use httpx.MockTransport via tests/helpers.py).
 - Log one line per company: domain | method | status | jobs | seconds.
-- Robots.txt disallow is a skip exit: status=BLOCKED, reason "robots.txt disallows ...".
+- Raise BlockedError for bot protection and RobotsDisallowedError (its subclass) for robots.txt;
+  set the company status from `e.status`, never hard-code it.
+
+## Company statuses
+| Status | Meaning |
+| --- | --- |
+| OK | jobs extracted (0 only if the ATS itself says 0) |
+| NO_JOBS_FOUND | careers page found, nothing extractable |
+| NO_CAREERS_PAGE | discovery failed |
+| BLOCKED | bot-protection signal only (blockcheck.py, or 403/429/503 from an ATS API) |
+| ROBOTS_DISALLOWED | robots.txt disallows the careers page or the ATS endpoint; reason keeps the text, e.g. "robots.txt disallows /careers" |
+| ERROR | unexpected exception / timeout; reason holds the type |
+| PENDING | not processed yet |
 
 ## Commands
 - python main.py run                 # full run (resumes an unfinished run)

@@ -80,12 +80,42 @@ def test_empty_field_does_not_overwrite(conn):
 def test_finish_run_counts(conn):
     run_id, _ = db.start_run(conn)
     for d, status, method, ats in [("a.com", "OK", "ats_api", "lever"), ("b.com", "OK", "heuristic", "custom"),
-                                   ("c.com", "BLOCKED", None, None), ("d.com", "NO_JOBS_FOUND", None, "darwinbox"),
+                                   ("c.com", "BLOCKED", None, None), ("g.com", "ROBOTS_DISALLOWED", None, None),
+                                   ("d.com", "NO_JOBS_FOUND", None, "darwinbox"),
                                    ("e.com", "NO_JOBS_FOUND", None, "darwinbox"), ("f.com", "ERROR", None, None)]:
         cid = db.upsert_company(conn, d, d)
         db.update_company(conn, cid, status=status, method=method, ats=ats, last_run_id=run_id)
     db.add_run_counts(conn, run_id, jobs_new=5, jobs_closed=1)
     run = db.finish_run(conn, run_id)
-    assert (run["companies_total"], run["ok"], run["blocked"], run["failed"], run["no_jobs"]) == (6, 2, 1, 1, 2)
+    assert (run["companies_total"], run["ok"], run["blocked"], run["robots_disallowed"], run["failed"],
+            run["no_jobs"]) == (7, 2, 1, 1, 1, 2)
     assert (run["ok_ats_api"], run["ok_heuristic"], run["jobs_new"]) == (1, 1, 5)
     assert run["top_no_jobs_ats"] == "darwinbox (2)"
+
+
+def test_migration_adds_new_columns_to_old_database(tmp_path):
+    import sqlite3
+    path = tmp_path / "old.db"
+    old = sqlite3.connect(path)
+    old.executescript("""
+        CREATE TABLE companies (id INTEGER PRIMARY KEY, name TEXT, website TEXT UNIQUE NOT NULL, careers_url TEXT,
+            careers_url_source TEXT, ats TEXT, ats_token TEXT, status TEXT NOT NULL DEFAULT 'PENDING',
+            status_reason TEXT, method TEXT, job_count INTEGER DEFAULT 0, last_checked TEXT, last_run_id INTEGER);
+        CREATE TABLE runs (id INTEGER PRIMARY KEY, started_at TEXT, finished_at TEXT, companies_total INTEGER DEFAULT 0,
+            ok INTEGER DEFAULT 0, blocked INTEGER DEFAULT 0, failed INTEGER DEFAULT 0, no_jobs INTEGER DEFAULT 0,
+            no_careers INTEGER DEFAULT 0, jobs_new INTEGER DEFAULT 0, jobs_closed INTEGER DEFAULT 0,
+            ok_ats_api INTEGER DEFAULT 0, ok_jsonld INTEGER DEFAULT 0, ok_heuristic INTEGER DEFAULT 0,
+            ok_browser INTEGER DEFAULT 0, top_no_jobs_ats TEXT);
+        INSERT INTO companies (name, website, status) VALUES ('Acme', 'acme.com', 'OK');
+        INSERT INTO runs (started_at, finished_at, ok) VALUES ('t0', 't1', 4);
+    """)
+    old.commit()
+    old.close()
+    conn = db.connect(path)
+    for table, cols in db.MIGRATIONS.items():
+        have = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+        assert {name for name, _ in cols} <= have
+    assert conn.execute("SELECT ok, robots_disallowed FROM runs").fetchone()[:] == (4, 0)
+    assert db.get_company(conn, "acme.com")["status"] == "OK"
+    conn.close()
+    db.connect(path).close()  # running the migration twice is harmless

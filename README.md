@@ -6,7 +6,8 @@ marked `BLOCKED` and skipped, never bypassed.
 
 - **Input:** tab `Companies` with columns `company_name | website | careers_url` (careers_url optional).
 - **Output:** tabs `Jobs` (active jobs + jobs closed in the last 7 days), `Company Status` (problems
-  first) and `Runs` (one summary row per run, newest first).
+  first: `ERROR`, `BLOCKED`, `ROBOTS_DISALLOWED`, `NO_CAREERS_PAGE`, `NO_JOBS_FOUND`, then `OK`) and
+  `Runs` (one summary row per run, newest first, with a count per status).
 - **History** lives in SQLite (`data/jobs.db`); the Sheet tabs are rebuilt from it after every run, so
   a failed Sheets write never loses data.
 
@@ -17,7 +18,8 @@ Each company runs through these stages and stops at the first that returns jobs:
 1. **Discover** the careers page: `careers_url` from the sheet, else probe `/careers`, `/jobs`,
    `/join-us`, … and `careers.` / `jobs.` subdomains, else the best careers link on the homepage.
 2. **Block check** (`scraper/blockcheck.py`): Cloudflare, captcha walls, DataDome, PerimeterX,
-   Akamai, Imperva, 403/429/503, robots.txt disallow → `BLOCKED`, no retry.
+   Akamai, Imperva, 403/429/503 → `BLOCKED`, no retry. A robots.txt disallow on the careers page or
+   ATS endpoint → `ROBOTS_DISALLOWED`, also skipped.
 3. **Detect the ATS** from the URL, links, iframes and scripts (Greenhouse, Lever, Ashby,
    SmartRecruiters, Workable, Recruitee, Workday; Darwinbox, Keka, Zoho Recruit, Freshteam, iCIMS,
    Taleo, SuccessFactors and BambooHR are recorded but not extracted yet). If the landing page has
@@ -35,7 +37,8 @@ Once a company's ATS token is known, later runs go straight to the ATS API.
 | `OK` | jobs extracted (0 only if the ATS itself says 0) | nothing |
 | `NO_JOBS_FOUND` | careers page found, nothing extractable | spot-check; may need a new ATS module |
 | `NO_CAREERS_PAGE` | discovery failed | paste `careers_url` in the sheet once |
-| `BLOCKED` | bot protection or robots.txt | ignore for the MVP |
+| `BLOCKED` | bot protection detected | ignore for the MVP |
+| `ROBOTS_DISALLOWED` | the site's robots.txt asks bots not to fetch the careers page or ATS endpoint; the reason names the path | respect it; ask the company or drop it from the list |
 | `ERROR` | unexpected exception / timeout; reason holds the type | check the logs if it repeats |
 
 ## One-time setup

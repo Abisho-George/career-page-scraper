@@ -15,11 +15,21 @@ class AtsError(Exception):
 
 
 class BlockedError(Exception):
-    """Raised when a fetch hits bot protection or a robots.txt disallow. Never retried."""
+    """Raised when a fetch hits bot protection. Never retried. `status` is the company status
+    it maps to, so callers can write `outcome.status = e.status` for this and its subclasses."""
+
+    status = "BLOCKED"
 
     def __init__(self, reason: str):
         super().__init__(reason)
         self.reason = reason
+
+
+class RobotsDisallowedError(BlockedError):
+    """robots.txt disallows the URL. A subclass of BlockedError so code that only needs to
+    'stop fetching' can catch both, but it maps to its own status."""
+
+    status = "ROBOTS_DISALLOWED"
 
 
 @dataclass

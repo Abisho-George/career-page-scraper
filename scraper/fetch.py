@@ -20,7 +20,7 @@ import httpx
 from tenacity import AsyncRetrying, retry_if_exception_type, stop_after_attempt, wait_fixed
 
 import config
-from scraper.ats.base import BlockedError
+from scraper.ats.base import RobotsDisallowedError
 
 log = logging.getLogger(__name__)
 
@@ -90,7 +90,7 @@ class Fetcher:
                       content: str | None = None, check_robots: bool = True) -> Response:
         if check_robots and self.respect_robots and not await self.allowed(url):
             path = urlsplit(url).path or "/"
-            raise BlockedError(f"robots.txt disallows {path}")
+            raise RobotsDisallowedError(f"robots.txt disallows {path}")
         async for attempt in AsyncRetrying(
             retry=retry_if_exception_type(RETRYABLE),
             stop=stop_after_attempt(config.MAX_RETRIES + 1),

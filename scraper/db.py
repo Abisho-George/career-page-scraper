@@ -7,7 +7,7 @@ from pathlib import Path
 
 import config
 
-STATUSES = ("OK", "BLOCKED", "NO_CAREERS_PAGE", "NO_JOBS_FOUND", "ERROR", "PENDING")
+STATUSES = ("OK", "BLOCKED", "ROBOTS_DISALLOWED", "NO_CAREERS_PAGE", "NO_JOBS_FOUND", "ERROR", "PENDING")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS companies (
@@ -52,6 +52,7 @@ CREATE TABLE IF NOT EXISTS runs (
     companies_total INTEGER DEFAULT 0,
     ok INTEGER DEFAULT 0,
     blocked INTEGER DEFAULT 0,
+    robots_disallowed INTEGER DEFAULT 0,
     failed INTEGER DEFAULT 0,
     no_jobs INTEGER DEFAULT 0,
     no_careers INTEGER DEFAULT 0,
@@ -64,6 +65,21 @@ CREATE TABLE IF NOT EXISTS runs (
     top_no_jobs_ats TEXT
 );
 """
+
+
+# Columns added after the first release. connect() adds any that an older database lacks,
+# so an existing data/jobs.db keeps working (ALTER TABLE ... ADD COLUMN never touches rows).
+MIGRATIONS: dict[str, list[tuple[str, str]]] = {
+    "runs": [("robots_disallowed", "INTEGER DEFAULT 0")],
+}
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    for table, columns in MIGRATIONS.items():
+        have = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+        for name, decl in columns:
+            if name not in have:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
 
 
 def now_iso() -> str:
@@ -80,6 +96,7 @@ def connect(path: Path | str | None = None) -> sqlite3.Connection:
     if str(path) != ":memory:":
         conn.execute("PRAGMA journal_mode = WAL")
     conn.executescript(SCHEMA)
+    _migrate(conn)
     conn.commit()
     return conn
 
@@ -226,13 +243,14 @@ def finish_run(conn: sqlite3.Connection, run_id: int) -> sqlite3.Row:
             no_jobs_ats[key] = no_jobs_ats.get(key, 0) + 1
     top = sorted(no_jobs_ats.items(), key=lambda kv: -kv[1])[:5]
     conn.execute(
-        """UPDATE runs SET finished_at = ?, companies_total = ?, ok = ?, blocked = ?, failed = ?,
+        """UPDATE runs SET finished_at = ?, companies_total = ?, ok = ?, blocked = ?, robots_disallowed = ?, failed = ?,
            no_jobs = ?, no_careers = ?, ok_ats_api = ?, ok_jsonld = ?, ok_heuristic = ?,
            ok_browser = ?, top_no_jobs_ats = ? WHERE id = ?""",
         (
             now_iso(), len(rows),
             count(lambda r: r["status"] == "OK"),
             count(lambda r: r["status"] == "BLOCKED"),
+            count(lambda r: r["status"] == "ROBOTS_DISALLOWED"),
             count(lambda r: r["status"] == "ERROR"),
             count(lambda r: r["status"] == "NO_JOBS_FOUND"),
             count(lambda r: r["status"] == "NO_CAREERS_PAGE"),
