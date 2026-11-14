@@ -1,0 +1,98 @@
+name: scrape
+
+on:
+  schedule:
+    - cron: "30 20 * * *"   # daily 02:00 IST (20:30 UTC). Weekly instead: "30 20 * * 0"
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: "Process at most N companies (0 = all)"
+        required: false
+        default: "0"
+      fresh:
+        description: "Start a new run even if the last one did not finish"
+        type: boolean
+        default: false
+
+concurrency:
+  group: scrape
+  cancel-in-progress: false
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          python -m playwright install --with-deps chromium
+
+      - name: Write service account key
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+        run: |
+          if [ -z "$GOOGLE_SERVICE_ACCOUNT_JSON" ]; then echo "::error::secret GOOGLE_SERVICE_ACCOUNT_JSON is not set"; exit 1; fi
+          printf '%s' "$GOOGLE_SERVICE_ACCOUNT_JSON" > service_account.json
+
+      # The database carries job history between runs. Each run restores the newest saved copy
+      # and saves a new one at the end (even if the run failed, so a crash resumes next time).
+      - name: Restore database
+        uses: actions/cache/restore@v4
+        with:
+          path: data/jobs.db
+          key: jobs-db-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            jobs-db-
+
+      - name: Run scraper
+        env:
+          SHEET_ID: ${{ secrets.SHEET_ID }}
+          CONTACT_EMAIL: ${{ secrets.CONTACT_EMAIL }}
+          GOOGLE_APPLICATION_CREDENTIALS: service_account.json
+          MAX_COMPANIES_PER_RUN: ${{ vars.MAX_COMPANIES_PER_RUN || '0' }}
+          INPUT_LIMIT: ${{ github.event.inputs.limit }}
+          INPUT_FRESH: ${{ github.event.inputs.fresh }}
+        run: |
+          mkdir -p data logs
+          ARGS=""
+          if [[ "$INPUT_LIMIT" =~ ^[0-9]+$ ]] && [ "$INPUT_LIMIT" != "0" ]; then ARGS="$ARGS --limit $INPUT_LIMIT"; fi
+          if [ "$INPUT_FRESH" = "true" ]; then ARGS="$ARGS --fresh"; fi
+          # stop ~10 min before the job limit so the database is always saved
+          timeout --signal=INT 310m python main.py run $ARGS
+
+      - name: Checkpoint database
+        if: always()
+        run: |
+          if [ -f data/jobs.db ]; then
+            python -c "import sqlite3; c=sqlite3.connect('data/jobs.db'); c.execute('PRAGMA wal_checkpoint(TRUNCATE)'); c.close()"
+          fi
+
+      - name: Save database
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: data/jobs.db
+          key: jobs-db-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Upload database and logs (backup)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jobs-db-${{ github.run_id }}
+          path: |
+            data/jobs.db
+            logs/
+          retention-days: 30
+          if-no-files-found: ignore
+
+      - name: Remove key
+        if: always()
+        run: rm -f service_account.json

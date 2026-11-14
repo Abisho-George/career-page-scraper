@@ -1,0 +1,22 @@
+{
+  "offset": 1,
+  "limit": 100,
+  "totalFound": 2,
+  "content": [
+    {
+      "id": "744000099999999",
+      "name": "Remote Support Agent",
+      "releasedDate": "2026-11-06T08:00:00.000Z",
+      "location": {
+        "city": "",
+        "country": "in",
+        "remote": true
+      },
+      "department": {},
+      "typeOfEmployment": {
+        "label": "Part-time"
+      },
+      "ref": "https://api.smartrecruiters.com/v1/companies/Acme/postings/744000099999999"
+    }
+  ]
+}

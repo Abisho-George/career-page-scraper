@@ -1,0 +1,63 @@
+{
+  "jobs": [
+    {
+      "absolute_url": "https://job-boards.greenhouse.io/acme/jobs/4012345007",
+      "data_compliance": [],
+      "internal_job_id": 3011111007,
+      "location": {
+        "name": "Bangalore, India"
+      },
+      "metadata": [
+        {
+          "id": 1,
+          "name": "Employment Type",
+          "value": "Full-time",
+          "value_type": "single_select"
+        }
+      ],
+      "id": 4012345007,
+      "updated_at": "2026-11-01T10:15:00-04:00",
+      "requisition_id": "ENG-101",
+      "title": "Senior Backend Engineer",
+      "content": "&lt;p&gt;We are looking for a &lt;strong&gt;Senior Backend Engineer&lt;/strong&gt;.&lt;/p&gt;&lt;ul&gt;&lt;li&gt;Python&lt;/li&gt;&lt;li&gt;Postgres&lt;/li&gt;&lt;/ul&gt;",
+      "departments": [
+        {
+          "id": 1,
+          "name": "Engineering",
+          "parent_id": null,
+          "child_ids": []
+        }
+      ],
+      "offices": [
+        {
+          "id": 2,
+          "name": "Bangalore",
+          "location": "Bangalore, India"
+        }
+      ],
+      "first_published": "2026-10-20T09:00:00-04:00"
+    },
+    {
+      "absolute_url": "https://job-boards.greenhouse.io/acme/jobs/4012345008",
+      "internal_job_id": 3011111008,
+      "location": {
+        "name": "Remote - US"
+      },
+      "metadata": null,
+      "id": 4012345008,
+      "updated_at": "2026-11-02T10:15:00-04:00",
+      "title": "Account Executive",
+      "content": "&lt;p&gt;Sell things.&lt;/p&gt;",
+      "departments": [
+        {
+          "id": 3,
+          "name": "Sales"
+        }
+      ],
+      "offices": []
+    }
+  ],
+  "meta": {
+    "total": 2
+  }
+}

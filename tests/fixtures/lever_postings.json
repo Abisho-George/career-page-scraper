@@ -1,0 +1,47 @@
+[
+  {
+    "additionalPlain": "We offer great benefits.",
+    "additional": "<div>We offer great benefits.</div>",
+    "categories": {
+      "commitment": "Full-time",
+      "department": "Engineering",
+      "location": "Mumbai",
+      "team": "Platform",
+      "allLocations": [
+        "Mumbai",
+        "Pune"
+      ]
+    },
+    "createdAt": 1761900000000,
+    "descriptionPlain": "Build the platform.",
+    "description": "<div>Build the platform.</div>",
+    "id": "5a1b2c3d-1111-2222-3333-444455556666",
+    "lists": [
+      {
+        "text": "Requirements",
+        "content": "<li>Go</li><li>Kubernetes</li>"
+      }
+    ],
+    "text": "Platform Engineer",
+    "country": "IN",
+    "workplaceType": "hybrid",
+    "hostedUrl": "https://jobs.lever.co/acme/5a1b2c3d-1111-2222-3333-444455556666",
+    "applyUrl": "https://jobs.lever.co/acme/5a1b2c3d-1111-2222-3333-444455556666/apply"
+  },
+  {
+    "categories": {
+      "commitment": "Intern",
+      "department": "Design",
+      "location": "Remote"
+    },
+    "createdAt": 1762000000000,
+    "descriptionPlain": "Design things.",
+    "description": "<div>Design things.</div>",
+    "id": "7f7f7f7f-0000-0000-0000-000000000001",
+    "lists": [],
+    "text": "Design Intern",
+    "workplaceType": "remote",
+    "hostedUrl": "https://jobs.lever.co/acme/7f7f7f7f-0000-0000-0000-000000000001",
+    "applyUrl": "https://jobs.lever.co/acme/7f7f7f7f-0000-0000-0000-000000000001/apply"
+  }
+]

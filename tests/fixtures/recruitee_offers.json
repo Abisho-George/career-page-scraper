@@ -1,0 +1,24 @@
+{
+  "offers": [
+    {
+      "id": 1501,
+      "slug": "frontend-developer",
+      "title": "Frontend Developer",
+      "description": "<p>Build UI.</p>",
+      "requirements": "<p>React</p>",
+      "location": "Amsterdam, Netherlands",
+      "city": "Amsterdam",
+      "country": "Netherlands",
+      "department": "Engineering",
+      "employment_type_code": "fulltime",
+      "remote": false,
+      "hybrid": true,
+      "on_site": false,
+      "careers_url": "https://acme.recruitee.com/o/frontend-developer",
+      "careers_apply_url": "https://acme.recruitee.com/o/frontend-developer/c/new",
+      "published_at": "2026-10-30 10:00:00 UTC",
+      "created_at": "2026-10-29 10:00:00 UTC",
+      "status": "published"
+    }
+  ]
+}

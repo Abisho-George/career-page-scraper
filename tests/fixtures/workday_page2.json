@@ -1,0 +1,51 @@
+{
+  "total": 0,
+  "jobPostings": [
+    {
+      "title": "Analyst 20",
+      "externalPath": "/job/Bengaluru/Analyst-20_R1020",
+      "locationsText": "Bengaluru",
+      "postedOn": "Posted 3 Days Ago",
+      "bulletFields": [
+        "R1020"
+      ]
+    },
+    {
+      "title": "Analyst 21",
+      "externalPath": "/job/Bengaluru/Analyst-21_R1021",
+      "locationsText": "Bengaluru",
+      "postedOn": "Posted 3 Days Ago",
+      "bulletFields": [
+        "R1021"
+      ]
+    },
+    {
+      "title": "Analyst 22",
+      "externalPath": "/job/Bengaluru/Analyst-22_R1022",
+      "locationsText": "Bengaluru",
+      "postedOn": "Posted 3 Days Ago",
+      "bulletFields": [
+        "R1022"
+      ]
+    },
+    {
+      "title": "Analyst 23",
+      "externalPath": "/job/Bengaluru/Analyst-23_R1023",
+      "locationsText": "Bengaluru",
+      "postedOn": "Posted 3 Days Ago",
+      "bulletFields": [
+        "R1023"
+      ]
+    },
+    {
+      "title": "Analyst 24",
+      "externalPath": "/job/Bengaluru/Analyst-24_R1024",
+      "locationsText": "Bengaluru",
+      "postedOn": "Posted 3 Days Ago",
+      "bulletFields": [
+        "R1024"
+      ]
+    }
+  ],
+  "facets": []
+}

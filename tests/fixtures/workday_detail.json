@@ -1,0 +1,21 @@
+{
+  "jobPostingInfo": {
+    "id": "abc",
+    "title": "Analyst 0",
+    "jobDescription": "<p>Analyse data.</p>",
+    "location": "Bengaluru",
+    "additionalLocations": [
+      "Hyderabad"
+    ],
+    "postedOn": "Posted 3 Days Ago",
+    "startDate": "2026-11-11",
+    "timeType": "Full time",
+    "jobReqId": "R1000",
+    "remoteType": "Hybrid",
+    "externalUrl": "https://acme.wd5.myworkdayjobs.com/External/job/Bengaluru/Analyst-0_R1000"
+  },
+  "hiringOrganization": {
+    "name": "Acme",
+    "url": ""
+  }
+}

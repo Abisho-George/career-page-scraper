@@ -1,0 +1,44 @@
+# Career Page Job Scraper
+
+Zero-cost Python agent: reads companies from a Google Sheet, finds each
+careers page, extracts open jobs, writes Jobs + Company Status back to the Sheet.
+
+## Hard rules
+- Zero cost: no paid APIs, no LLM APIs, no proxies, no paid search.
+- Never bypass bot protection. If blockcheck.py says blocked, set
+  status=BLOCKED with a reason and move on. No retries, no stealth plugins,
+  no CAPTCHA solving, no rotating user agents.
+- Respect robots.txt. Honest User-Agent: "JobScraperBot/0.1 (+mailto:CONTACT_EMAIL)".
+- Politeness: max 1 concurrent request per domain, 2-5 s random delay between
+  requests to the same domain, max 5 companies in parallel.
+- One company failing must never stop the run. Wrap each company in
+  try/except, record status=ERROR + reason, continue.
+- Secrets only from .env / environment. Never commit service_account.json.
+
+## Stack
+Python 3.11+, httpx, selectolax, trafilatura, playwright (chromium),
+gspread + google-auth, sqlite3 (stdlib), python-dotenv, pytest, tenacity.
+
+## Extraction ladder (stop at first that returns jobs)
+1. ATS public JSON API (scraper/ats/*)
+2. schema.org JobPosting JSON-LD (extract/jsonld.py)
+3. Heuristic job links + trafilatura (extract/heuristic.py)
+4. Playwright render, then repeat 2 and 3 (browser.py)
+
+## Conventions
+- Every ATS module exposes: async fetch_jobs(token: str, fetcher) -> list[Job]
+  (async because the whole pipeline runs on asyncio; `fetcher` is the shared polite client).
+- Job is a dataclass in scraper/ats/base.py; all extractors return it.
+- Tests use saved fixtures in tests/fixtures; no live network in pytest
+  (use httpx.MockTransport via tests/helpers.py).
+- Log one line per company: domain | method | status | jobs | seconds.
+- Robots.txt disallow is a skip exit: status=BLOCKED, reason "robots.txt disallows ...".
+
+## Commands
+- python main.py run                 # full run (resumes an unfinished run)
+- python main.py run --limit 20      # quick run
+- python main.py run --fresh         # start a new run even if the last one crashed
+- python main.py run --csv companies.csv --no-sheets   # local run without Google Sheets
+- python main.py company acme.com    # debug one company, verbose
+- python main.py sheets              # rebuild the Sheet tabs from SQLite only
+- pytest -q
