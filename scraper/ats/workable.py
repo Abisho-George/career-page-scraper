@@ -12,7 +12,7 @@ import logging
 from urllib.parse import quote
 
 import config
-from scraper.ats.base import AtsError, Job, get_json, html_to_text, join_nonempty, never_known
+from scraper.ats.base import AtsError, Job, get_json, html_to_text, join_nonempty, never_known, require_board
 
 log = logging.getLogger(__name__)
 
@@ -70,8 +70,8 @@ async def _v3(token: str, fetcher, known) -> list[Job]:
     jobs: list[Job] = []
     payload: dict = {"query": "", "location": [], "department": [], "worktype": [], "remote": []}
     for _ in range(50):
-        data = await get_json(fetcher, V3_LIST.format(token=tok), method="POST", payload=payload,
-                              what="workable api")
+        data = require_board(await get_json(fetcher, V3_LIST.format(token=tok), method="POST", payload=payload,
+                                            what="workable api"), "results", "workable api")
         jobs.extend(map_v3_job(j, token) for j in data.get("results") or [] if j.get("title"))
         nxt = data.get("nextPage")
         if not nxt:
@@ -95,7 +95,8 @@ async def _v3(token: str, fetcher, known) -> list[Job]:
 async def fetch_jobs(token: str, fetcher, known=never_known) -> list[Job]:
     try:
         data = await get_json(fetcher, WIDGET.format(token=quote(token, safe="")), what="workable api")
+        data = require_board(data, "jobs", "workable api")
         return [map_widget_job(j, token) for j in data.get("jobs") or [] if j.get("title")]
-    except AtsError as e:
+    except AtsError as e:  # includes AtsBoardGone: the v3 endpoint decides
         log.debug("workable widget failed for %s (%s); trying v3", token, e)
     return await _v3(token, fetcher, known)

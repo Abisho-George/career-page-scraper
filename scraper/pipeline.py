@@ -16,7 +16,7 @@ from selectolax.lexbor import LexborHTMLParser
 import config
 from scraper import db, diff
 from scraper.ats import MODULES
-from scraper.ats.base import AtsError, BlockedError, Job
+from scraper.ats.base import AtsBoardGone, AtsError, BlockedError, Job
 from scraper.blockcheck import is_blocked
 from scraper.browser import Browser, looks_js_rendered
 from scraper.detect import FLAG_ONLY, detect_ats, is_ats_url
@@ -46,6 +46,12 @@ class Outcome:
     careers_url_source: str | None = None
     ats: str | None = None
     ats_token: str | None = None
+    allow_close: bool = True              # False: never close jobs this run (e.g. the ATS call failed)
+    clear_ats: bool = False               # forget the stored ats/ats_token even if none was detected
+    empty_ats_runs: int | None = None     # new consecutive_empty_ats_runs value (None = leave as is)
+
+
+ATS_SWITCH_NOTE = "ATS changed or removed, rediscovered"
 
 
 @dataclass
@@ -96,15 +102,21 @@ def _listing_link(page: Response, domain: str) -> str | None:
     return None
 
 
-async def _try_ats(ctx: Context, ats: str, token: str, known) -> list[Job] | None:
-    """Returns jobs (possibly empty: the ATS says 0) or None when the API doesn't work for this token."""
+async def _call_ats(ctx: Context, ats: str, token: str, known) -> tuple[list[Job] | None, AtsError | None]:
+    """(jobs, None) on success (jobs may be empty: the ATS says 0), or (None, error).
+    BlockedError / RobotsDisallowedError propagate."""
     try:
         jobs = await MODULES[ats].fetch_jobs(token, ctx.fetcher, known)
         log.debug("%s api %s -> %d jobs", ats, token, len(jobs))
-        return jobs
+        return jobs, None
     except AtsError as e:
         log.debug("%s api %s failed: %s", ats, token, e)
-        return None
+        return None, e
+
+
+async def _try_ats(ctx: Context, ats: str, token: str, known) -> list[Job] | None:
+    """Returns jobs (possibly empty: the ATS says 0) or None when the API doesn't work for this token."""
+    return (await _call_ats(ctx, ats, token, known))[0]
 
 
 async def _run_ladder(ctx: Context, pages: list[Response], domain: str, careers_url: str,
@@ -123,6 +135,14 @@ async def _run_ladder(ctx: Context, pages: list[Response], domain: str, careers_
 
 
 async def _process(ctx: Context, company: sqlite3.Row) -> Outcome:
+    out = await _run_stages(ctx, company)
+    if out.clear_ats and not out.reason.startswith(ATS_SWITCH_NOTE):
+        # every outcome of a run that dropped the stored ATS says so, whatever happened next
+        out.reason = f"{ATS_SWITCH_NOTE}; {out.reason}" if out.reason else ATS_SWITCH_NOTE
+    return out
+
+
+async def _run_stages(ctx: Context, company: sqlite3.Row) -> Outcome:
     domain = company["website"]
     known = diff.known_with_description(ctx.conn, company["id"], domain)
     out = Outcome(status="ERROR", careers_url=company["careers_url"],
@@ -130,19 +150,44 @@ async def _process(ctx: Context, company: sqlite3.Row) -> Outcome:
                   ats=company["ats"], ats_token=company["ats_token"])
 
     # 0) Known ATS token from a previous run: go straight to the API.
+    #    switched = "gone" (404/410/invalid board) or "empty" (0 jobs two runs in a row while the
+    #    company had jobs): forget the token and rediscover in this same run, closing nothing.
+    switched = ""
+    old_ats = (company["ats"], company["ats_token"])
     if company["ats"] in MODULES and company["ats_token"]:
         try:
-            jobs = await _try_ats(ctx, company["ats"], company["ats_token"], known)
-        except BlockedError as e:
+            jobs, err = await _call_ats(ctx, company["ats"], company["ats_token"], known)
+        except BlockedError as e:  # includes RobotsDisallowedError
             return Outcome(**{**out.__dict__, "status": e.status, "reason": e.reason})
-        if jobs is not None:
-            out.status, out.method, out.jobs = "OK", "ats_api", jobs
-            return out
+        if err is None:
+            had = db.active_job_count(ctx.conn, company["id"])
+            if jobs or not had:
+                out.status, out.method, out.jobs, out.empty_ats_runs = "OK", "ats_api", jobs, 0
+                return out
+            streak = (company["consecutive_empty_ats_runs"] or 0) + 1
+            if streak < 2:
+                out.status, out.method, out.allow_close, out.empty_ats_runs = "OK", "ats_api", False, streak
+                out.reason = (f"{company['ats']} returned 0 jobs (had {had}); "
+                              "waiting one run before treating the board as removed")
+                return out
+            switched = "empty"
+        elif isinstance(err, AtsBoardGone):
+            switched = "gone"
+        else:
+            # transient (5xx, bad JSON, ...): keep the token, close nothing, try again next run
+            return Outcome(**{**out.__dict__, "status": "ERROR", "reason": str(err), "allow_close": False})
+        log.info("%s: stored %s board %r %s; rediscovering", domain, company["ats"], company["ats_token"],
+                 "is gone" if switched == "gone" else "was empty twice")
+        out.ats = out.ats_token = None
+        out.clear_ats, out.allow_close, out.empty_ats_runs = True, False, 0
+        out.reason = ATS_SWITCH_NOTE
 
-    # 1) Careers URL: sheet > stored discovery > discover now.
+    # 1) Careers URL: sheet > stored discovery > discover now (always discover after a switch).
     page: Response | None = None
     source = company["careers_url_source"]
     url = company["careers_url"] if source in ("sheet", "discovered") else None
+    if switched and source != "sheet":
+        url = None
     rediscovered = False
 
     async def run_discovery() -> tuple[str, Response | None]:
@@ -155,6 +200,8 @@ async def _process(ctx: Context, company: sqlite3.Row) -> Outcome:
                 raise _Stop(Outcome(**{**out.__dict__, "status": "ROBOTS_DISALLOWED", "reason": d.robots}))
             raise _Stop(Outcome(**{**out.__dict__, "status": "NO_CAREERS_PAGE", "reason": d.reason,
                                    "careers_url": None, "careers_url_source": None}))
+        if switched:
+            out.careers_url = d.url
         return d.url, d.page
 
     try:
@@ -166,13 +213,14 @@ async def _process(ctx: Context, company: sqlite3.Row) -> Outcome:
         # The careers URL is itself a supported ATS board: use the API without fetching the page.
         if page is None and is_ats_url(url):
             ats0, token0 = detect_ats(url, "")
-            if ats0 in MODULES and token0 and (ats0, token0) != (company["ats"], company["ats_token"]):
+            if ats0 in MODULES and token0 and (ats0, token0) != old_ats:
                 try:
                     jobs = await _try_ats(ctx, ats0, token0, known)
                 except BlockedError as e:
                     raise _Stop(Outcome(**{**out.__dict__, "status": e.status, "reason": e.reason}))
                 if jobs is not None:
                     out.status, out.method, out.jobs, out.ats, out.ats_token = "OK", "ats_api", jobs, ats0, token0
+                    out.empty_ats_runs = 0
                     return out
 
         # 2) Fetch the careers page (discovery may already have it).
@@ -230,13 +278,22 @@ async def _process(ctx: Context, company: sqlite3.Row) -> Outcome:
 
     # 4) ATS API.
     ats_note = ""
-    if ats in MODULES and token:
+    if switched and (ats, token) == old_ats:
+        # Rediscovery found the same board we just gave up on.
+        if switched == "empty":
+            # Still linked from the careers page and empty twice: the company really has no
+            # openings. Accept 0 jobs and close the old ones.
+            out.status, out.method, out.jobs, out.allow_close = "OK", "ats_api", [], True
+            out.reason = f"{ATS_SWITCH_NOTE}; same {ats} board still linked and empty, 0 jobs accepted"
+            return out
+        ats_note = f"careers page still links to the old {ats} board {token!r}"
+    elif ats in MODULES and token:
         try:
             jobs = await _try_ats(ctx, ats, token, known)
         except BlockedError as e:
             return Outcome(**{**out.__dict__, "status": e.status, "reason": e.reason})
         if jobs is not None:
-            out.status, out.method, out.jobs = "OK", "ats_api", jobs
+            out.status, out.method, out.jobs, out.empty_ats_runs = "OK", "ats_api", jobs, 0
             return out
         ats_note = f"{ats} api did not accept token {token!r}"
 
@@ -259,14 +316,14 @@ async def _process(ctx: Context, company: sqlite3.Row) -> Outcome:
             if blocked:
                 return Outcome(**{**out.__dict__, "status": "BLOCKED", "reason": f"{reason} (rendered)"})
             ats_r, tok_r = detect_ats(rendered.url, rendered.text)
-            if ats_r in MODULES and tok_r and (ats_r, tok_r) != (ats, token):
+            if ats_r in MODULES and tok_r and (ats_r, tok_r) not in ((ats, token), old_ats if switched else (None, None)):
                 out.ats, out.ats_token = ats_r, tok_r
                 try:
                     r_jobs = await _try_ats(ctx, ats_r, tok_r, known)
                 except BlockedError as e:
                     return Outcome(**{**out.__dict__, "status": e.status, "reason": e.reason})
                 if r_jobs is not None:
-                    out.status, out.method, out.jobs = "OK", "ats_api", r_jobs
+                    out.status, out.method, out.jobs, out.empty_ats_runs = "OK", "ats_api", r_jobs, 0
                     return out
             elif ats_r in FLAG_ONLY and out.ats in ("custom", "unknown"):
                 out.ats, out.ats_token = ats_r, tok_r
@@ -291,7 +348,8 @@ def save_outcome(conn: sqlite3.Connection, company: sqlite3.Row, run_id: int, ou
     if outcome.status == "OK":
         jobs = [normalize_job(j) for j in outcome.jobs]
         jobs = [j for j in jobs if j.title and j.apply_url]
-        res = diff.apply_jobs(conn, company["id"], domain, jobs, now, company_ok=True, method=outcome.method)
+        res = diff.apply_jobs(conn, company["id"], domain, jobs, now, company_ok=outcome.allow_close,
+                              method=outcome.method)
         note = ""
         if res.drop_held:
             note = "sharp drop held, waiting one run"
@@ -315,6 +373,10 @@ def save_outcome(conn: sqlite3.Connection, company: sqlite3.Row, run_id: int, ou
     if outcome.ats:
         fields["ats"] = outcome.ats
         fields["ats_token"] = outcome.ats_token
+    elif outcome.clear_ats:
+        fields["ats"] = fields["ats_token"] = None
+    if outcome.empty_ats_runs is not None:
+        fields["consecutive_empty_ats_runs"] = outcome.empty_ats_runs
     db.update_company(conn, company["id"], **fields)
     db.add_run_counts(conn, run_id, jobs_new=res.new, jobs_closed=res.closed)
     conn.commit()

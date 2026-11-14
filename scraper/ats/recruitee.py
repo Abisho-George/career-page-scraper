@@ -1,7 +1,7 @@
 """Recruitee careers site API: https://docs.recruitee.com/reference/offers"""
 from __future__ import annotations
 
-from scraper.ats.base import Job, get_json, html_to_text, join_nonempty, never_known
+from scraper.ats.base import Job, get_json, html_to_text, join_nonempty, never_known, require_board
 
 API = "https://{token}.recruitee.com/api/offers/"
 EMPLOYMENT = {"fulltime": "Full-time", "parttime": "Part-time", "contract": "Contract",
@@ -39,4 +39,5 @@ def parse(data: dict, token: str) -> list[Job]:
 
 
 async def fetch_jobs(token: str, fetcher, known=never_known) -> list[Job]:
-    return parse(await get_json(fetcher, API.format(token=token.lower()), what="recruitee api"), token)
+    data = await get_json(fetcher, API.format(token=token.lower()), what="recruitee api")
+    return parse(require_board(data, "offers", "recruitee api"), token)

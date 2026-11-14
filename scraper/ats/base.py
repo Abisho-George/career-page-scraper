@@ -11,7 +11,12 @@ import config
 
 
 class AtsError(Exception):
-    """An ATS API call failed in a way that means 'this token/endpoint does not work'."""
+    """An ATS API call failed (server error, bad JSON, ...). Usually transient."""
+
+
+class AtsBoardGone(AtsError):
+    """The board itself is gone: HTTP 404/410, or a 2xx response that is not a job board
+    (e.g. {"success": false}). Means the company moved ATS or removed the board."""
 
 
 class BlockedError(Exception):
@@ -82,19 +87,29 @@ def html_to_text(raw: str | None, max_chars: int = config.DESCRIPTION_MAX_CHARS)
 
 
 async def get_json(fetcher, url: str, *, method: str = "GET", payload: dict | None = None, what: str = "ats api"):
-    """Fetch JSON from an ATS API. 403/429/503 -> BlockedError; other non-2xx or bad JSON -> AtsError."""
+    """Fetch JSON from an ATS API. 403/429/503 -> BlockedError; 404/410 -> AtsBoardGone;
+    other non-2xx or bad JSON -> AtsError. robots.txt disallow -> RobotsDisallowedError."""
     if method == "POST":
         resp = await fetcher.post_json(url, payload or {})
     else:
         resp = await fetcher.get(url, headers={"Accept": "application/json"})
     if resp.status in (403, 429, 503):
         raise BlockedError(f"http {resp.status} on {what}")
+    if resp.status in (404, 410):
+        raise AtsBoardGone(f"{what} http {resp.status}")
     if not resp.ok:
         raise AtsError(f"{what} http {resp.status}")
     try:
         return resp.json()
     except ValueError as e:
         raise AtsError(f"{what} returned invalid json") from e
+
+
+def require_board(data, key: str, what: str) -> dict:
+    """A real board response is a JSON object with `key`; anything else means the board is gone."""
+    if not isinstance(data, dict) or key not in data:
+        raise AtsBoardGone(f"{what}: invalid board response (no '{key}')")
+    return data
 
 
 def never_known(_external_id: str) -> bool:

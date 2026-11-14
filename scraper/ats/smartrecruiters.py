@@ -5,7 +5,7 @@ import logging
 from urllib.parse import quote
 
 import config
-from scraper.ats.base import AtsError, Job, get_json, html_to_text, join_nonempty, never_known
+from scraper.ats.base import AtsError, Job, get_json, html_to_text, join_nonempty, never_known, require_board
 
 log = logging.getLogger(__name__)
 
@@ -56,8 +56,8 @@ async def fetch_jobs(token: str, fetcher, known=never_known) -> list[Job]:
     jobs: list[Job] = []
     offset = 0
     while True:
-        data = await get_json(fetcher, LIST.format(token=tok, limit=PAGE, offset=offset),
-                              what="smartrecruiters api")
+        data = require_board(await get_json(fetcher, LIST.format(token=tok, limit=PAGE, offset=offset),
+                                            what="smartrecruiters api"), "content", "smartrecruiters api")
         content = data.get("content") or []
         jobs.extend(map_summary(p, token) for p in content if p.get("name"))
         total = int(data.get("totalFound") or 0)

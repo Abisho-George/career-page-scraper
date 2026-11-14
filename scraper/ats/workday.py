@@ -13,7 +13,7 @@ from __future__ import annotations
 import logging
 
 import config
-from scraper.ats.base import AtsError, Job, get_json, html_to_text, join_nonempty, never_known
+from scraper.ats.base import AtsError, Job, get_json, html_to_text, join_nonempty, never_known, require_board
 
 log = logging.getLogger(__name__)
 
@@ -76,10 +76,11 @@ async def fetch_jobs(token: str, fetcher, known=never_known) -> list[Job]:
     while True:
         data = await get_json(fetcher, f"{cxs}/jobs", method="POST", what="workday api",
                               payload={"appliedFacets": {}, "limit": PAGE, "offset": offset, "searchText": ""})
-        postings = data.get("jobPostings") or []
         if total is None:
+            require_board(data, "jobPostings", "workday api")
             # Workday only reports the real total on the first page; later pages often say 0.
             total = int(data.get("total") or 0)
+        postings = data.get("jobPostings") or []
         jobs.extend(map_posting(p, public_base) for p in postings if p.get("title"))
         offset += PAGE
         if not postings or offset >= total or offset >= MAX_JOBS:

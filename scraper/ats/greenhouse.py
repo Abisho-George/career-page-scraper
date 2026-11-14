@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from urllib.parse import quote
 
-from scraper.ats.base import Job, get_json, html_to_text, never_known
+from scraper.ats.base import Job, get_json, html_to_text, never_known, require_board
 
 API = "https://boards-api.greenhouse.io/v1/boards/{token}/jobs?content=true"
 
@@ -40,4 +40,4 @@ def parse(data: dict) -> list[Job]:
 
 async def fetch_jobs(token: str, fetcher, known=never_known) -> list[Job]:
     data = await get_json(fetcher, API.format(token=quote(token, safe="")), what="greenhouse api")
-    return parse(data)
+    return parse(require_board(data, "jobs", "greenhouse api"))

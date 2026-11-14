@@ -30,7 +30,13 @@ Each company runs through these stages and stops at the first that returns jobs:
 5. **Normalize** (city aliases, remote/hybrid, ISO dates) and **diff** (new / still open / closed).
    Jobs are only closed when the company finished `OK`.
 
-Once a company's ATS token is known, later runs go straight to the ATS API.
+Once a company's ATS token is known, later runs go straight to the ATS API. If that board is
+gone (HTTP 404/410 or a response that isn't a job board), or returns 0 jobs two runs in a row
+while the company had jobs, the stored ATS is cleared and discovery + detection run again in the
+same run; the reason starts with "ATS changed or removed, rediscovered". Jobs are never closed on
+that run (the next successful run closes the old ones). If rediscovery lands on the same board and
+it is still empty, the company is taken to have no openings and its old jobs are closed. Other ATS
+failures (5xx, bad JSON) give `ERROR` and keep the stored token.
 
 | Status | Meaning | What you do |
 | --- | --- | --- |

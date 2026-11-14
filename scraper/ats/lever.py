@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from urllib.parse import quote
 
-from scraper.ats.base import Job, get_json, html_to_text, join_nonempty, never_known
+from scraper.ats.base import AtsBoardGone, Job, get_json, html_to_text, join_nonempty, never_known
 
 API = "https://api.lever.co/v0/postings/{token}?mode=json"
 API_EU = "https://api.eu.lever.co/v0/postings/{token}?mode=json"
@@ -46,7 +46,11 @@ def map_job(p: dict) -> Job:
 
 def parse(data) -> list[Job]:
     if isinstance(data, dict):  # error payloads look like {"ok": false, "error": "..."}
-        data = data.get("data") or []
+        if data.get("ok") is False or "data" not in data:
+            raise AtsBoardGone(f"lever api: invalid board response ({data.get('error') or 'not a list'})")
+        data = data["data"] or []
+    if not isinstance(data, list):
+        raise AtsBoardGone("lever api: invalid board response (not a list)")
     return [map_job(p) for p in data if p.get("text")]
 
 

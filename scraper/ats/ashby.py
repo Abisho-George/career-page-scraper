@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from urllib.parse import quote
 
-from scraper.ats.base import Job, get_json, html_to_text, join_nonempty, never_known
+from scraper.ats.base import Job, get_json, html_to_text, join_nonempty, never_known, require_board
 
 API = "https://api.ashbyhq.com/posting-api/job-board/{token}"
 EMPLOYMENT = {"FullTime": "Full-time", "PartTime": "Part-time", "Intern": "Intern",
@@ -37,4 +37,4 @@ def parse(data: dict) -> list[Job]:
 
 async def fetch_jobs(token: str, fetcher, known=never_known) -> list[Job]:
     data = await get_json(fetcher, API.format(token=quote(token, safe="")), what="ashby api")
-    return parse(data)
+    return parse(require_board(data, "jobs", "ashby api"))
