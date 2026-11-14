@@ -143,5 +143,8 @@ tenant fills in over a few runs), `USE_BROWSER`, `BROWSER_EXECUTABLE`, and `JOBS
   `careers_url` in the sheet for those.
 - `posted_at` is often empty outside ATS feeds; `first_seen` is the reliable "new job" date.
 - For pages scraped without an ATS, if a company suddenly shows fewer than half of its previous
-  jobs (and had at least 10), nothing is closed that run (the reason says so). This protects
-  against a site redesign closing every job at once.
+  jobs (and had at least 10), nothing is closed that run and the reason says
+  "sharp drop held, waiting one run" (the new count is kept in `companies.pending_drop_count`).
+  If the next run sees about the same count (within ±20%), the drop is accepted and the missing
+  jobs are closed; if the count recovered, the hold is cleared. This stops a site redesign from
+  closing every job at once without keeping stale jobs open forever.

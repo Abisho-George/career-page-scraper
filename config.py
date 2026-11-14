@@ -59,9 +59,12 @@ BROWSER_EXECUTABLE = os.getenv("BROWSER_EXECUTABLE", "")
 BROWSER_TIMEOUT_MS = 20_000
 
 # Change tracking: for non-ATS methods, don't close jobs if we suddenly see far fewer
-# than before (protects against a page redesign closing everything at once).
+# than before (protects against a page redesign closing everything at once). The drop is held
+# for one run; if the next run sees about the same lower count (within the tolerance) it is
+# accepted and the missing jobs are closed.
 CLOSE_GUARD_MIN_PREVIOUS = 10
 CLOSE_GUARD_RATIO = 0.5
+DROP_CONFIRM_TOLERANCE = 0.2
 
 # Careers discovery
 CAREERS_PATHS = [

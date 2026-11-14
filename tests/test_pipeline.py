@@ -333,3 +333,26 @@ def test_robots_company_counted_and_sorted(cli, capsys, monkeypatch):
     order = [row[2] for row in m.build_tabs(conn)["Company Status"][1:]]
     assert order[:2] == ["BLOCKED", "ROBOTS_DISALLOWED"]
     assert conn.execute("SELECT robots_disallowed FROM runs").fetchone()[0] == 1
+
+
+def test_sharp_drop_reason_text(conn):
+    from scraper.ats.base import Job
+    from scraper.pipeline import Outcome, save_outcome
+
+    def jobs(n):
+        return [Job(title=f"Role {i}", apply_url=f"https://x.com/jobs/role-{i}") for i in range(n)]
+
+    cid = db.upsert_company(conn, "X", "x.com")
+    run_id, _ = db.start_run(conn)
+
+    def save(n):
+        save_outcome(conn, db.get_company(conn, "x.com"), run_id, Outcome(status="OK", method="heuristic", jobs=jobs(n)))
+        return db.get_company(conn, "x.com")
+
+    assert save(20)["job_count"] == 20
+    c = save(4)
+    assert c["status_reason"] == "sharp drop held, waiting one run"
+    assert (c["job_count"], c["pending_drop_count"]) == (20, 4)
+    c = save(4)
+    assert c["status_reason"] == "sharp drop confirmed, 16 jobs closed"
+    assert (c["job_count"], c["pending_drop_count"]) == (4, 0)

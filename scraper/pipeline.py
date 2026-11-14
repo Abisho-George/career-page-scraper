@@ -292,8 +292,13 @@ def save_outcome(conn: sqlite3.Connection, company: sqlite3.Row, run_id: int, ou
         jobs = [normalize_job(j) for j in outcome.jobs]
         jobs = [j for j in jobs if j.title and j.apply_url]
         res = diff.apply_jobs(conn, company["id"], domain, jobs, now, company_ok=True, method=outcome.method)
-        if res.close_skipped:
-            outcome.reason = (outcome.reason + "; " if outcome.reason else "") + "job count dropped sharply; nothing closed"
+        note = ""
+        if res.drop_held:
+            note = "sharp drop held, waiting one run"
+        elif res.drop_accepted:
+            note = f"sharp drop confirmed, {res.closed} jobs closed"
+        if note:
+            outcome.reason = (outcome.reason + "; " if outcome.reason else "") + note
     else:
         res = diff.DiffResult(active=db.active_job_count(conn, company["id"]))
     fields = dict(

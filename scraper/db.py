@@ -23,7 +23,8 @@ CREATE TABLE IF NOT EXISTS companies (
     method TEXT,                      -- source_method of the last successful extraction
     job_count INTEGER DEFAULT 0,
     last_checked TEXT,
-    last_run_id INTEGER
+    last_run_id INTEGER,
+    pending_drop_count INTEGER NOT NULL DEFAULT 0   -- job count of a held sharp drop (0 = none)
 );
 
 CREATE TABLE IF NOT EXISTS jobs (
@@ -71,6 +72,7 @@ CREATE TABLE IF NOT EXISTS runs (
 # so an existing data/jobs.db keeps working (ALTER TABLE ... ADD COLUMN never touches rows).
 MIGRATIONS: dict[str, list[tuple[str, str]]] = {
     "runs": [("robots_disallowed", "INTEGER DEFAULT 0")],
+    "companies": [("pending_drop_count", "INTEGER NOT NULL DEFAULT 0")],
 }
 
 

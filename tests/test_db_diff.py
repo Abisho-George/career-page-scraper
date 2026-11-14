@@ -119,3 +119,72 @@ def test_migration_adds_new_columns_to_old_database(tmp_path):
     assert db.get_company(conn, "acme.com")["status"] == "OK"
     conn.close()
     db.connect(path).close()  # running the migration twice is harmless
+
+
+# ---------------------------------------------------------------- sharp-drop guard with an exit
+
+def scraped(*titles):
+    return [Job(title=t, apply_url=f"https://x.com/{t}", source_method="heuristic") for t in titles]
+
+
+def pending(conn, cid):
+    return conn.execute("SELECT pending_drop_count FROM companies WHERE id = ?", (cid,)).fetchone()[0]
+
+
+def active_titles(conn, cid):
+    return {r[0] for r in conn.execute("SELECT title FROM jobs WHERE company_id = ? AND is_active = 1", (cid,))}
+
+
+ALL12 = [f"j{i}" for i in range(12)]
+
+
+def test_sharp_drop_then_recover_closes_nothing(conn):
+    cid = db.upsert_company(conn, "X", "x.com")
+    diff.apply_jobs(conn, cid, "x.com", scraped(*ALL12), "t1", company_ok=True, method="heuristic")
+    r = diff.apply_jobs(conn, cid, "x.com", scraped("j0", "j1", "j2"), "t2", company_ok=True, method="heuristic")
+    assert r.drop_held and r.closed == 0 and pending(conn, cid) == 3
+    r = diff.apply_jobs(conn, cid, "x.com", scraped(*ALL12), "t3", company_ok=True, method="heuristic")
+    assert not r.drop_held and not r.drop_accepted and r.closed == 0
+    assert pending(conn, cid) == 0 and active_titles(conn, cid) == set(ALL12)
+
+
+def test_sharp_drop_twice_closes_on_second_run(conn):
+    cid = db.upsert_company(conn, "X", "x.com")
+    diff.apply_jobs(conn, cid, "x.com", scraped(*ALL12), "t1", company_ok=True, method="heuristic")
+    r = diff.apply_jobs(conn, cid, "x.com", scraped("j0", "j1", "j2"), "t2", company_ok=True, method="heuristic")
+    assert r.drop_held and r.closed == 0
+    r = diff.apply_jobs(conn, cid, "x.com", scraped("j0", "j1", "j2"), "t3", company_ok=True, method="heuristic")
+    assert r.drop_accepted and r.closed == 9 and r.active == 3
+    assert pending(conn, cid) == 0 and active_titles(conn, cid) == {"j0", "j1", "j2"}
+
+
+def test_drop_confirmed_within_20_percent_not_outside(conn):
+    jobs30 = [f"j{i}" for i in range(30)]
+    cid = db.upsert_company(conn, "X", "x.com")
+    diff.apply_jobs(conn, cid, "x.com", scraped(*jobs30), "t1", company_ok=True, method="jsonld")
+    diff.apply_jobs(conn, cid, "x.com", scraped(*jobs30[:10]), "t2", company_ok=True, method="jsonld")
+    assert pending(conn, cid) == 10
+    # 13 is outside 10 +/- 20%: still a sharp drop, held again at the new count
+    r = diff.apply_jobs(conn, cid, "x.com", scraped(*jobs30[:13]), "t3", company_ok=True, method="jsonld")
+    assert r.drop_held and r.closed == 0 and pending(conn, cid) == 13
+    # 11 is within 13 +/- 20% (10.4..15.6): accepted
+    r = diff.apply_jobs(conn, cid, "x.com", scraped(*jobs30[:11]), "t4", company_ok=True, method="jsonld")
+    assert r.drop_accepted and r.closed == 19 and pending(conn, cid) == 0
+
+
+def test_held_drop_survives_a_failed_run(conn):
+    cid = db.upsert_company(conn, "X", "x.com")
+    diff.apply_jobs(conn, cid, "x.com", scraped(*ALL12), "t1", company_ok=True, method="heuristic")
+    diff.apply_jobs(conn, cid, "x.com", scraped("j0", "j1", "j2"), "t2", company_ok=True, method="heuristic")
+    diff.apply_jobs(conn, cid, "x.com", [], "t3", company_ok=False, method="")  # e.g. BLOCKED
+    assert pending(conn, cid) == 3
+    r = diff.apply_jobs(conn, cid, "x.com", scraped("j0", "j1", "j2"), "t4", company_ok=True, method="heuristic")
+    assert r.drop_accepted and r.closed == 9
+
+
+def test_ats_run_clears_a_held_drop(conn):
+    cid = db.upsert_company(conn, "X", "x.com")
+    diff.apply_jobs(conn, cid, "x.com", scraped(*ALL12), "t1", company_ok=True, method="heuristic")
+    diff.apply_jobs(conn, cid, "x.com", scraped("j0"), "t2", company_ok=True, method="heuristic")
+    r = diff.apply_jobs(conn, cid, "x.com", scraped("j0"), "t3", company_ok=True, method="ats_api")
+    assert r.closed == 11 and not r.drop_accepted and pending(conn, cid) == 0
